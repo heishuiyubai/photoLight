@@ -235,8 +235,8 @@ fun PhotoFrameApp() {
                             value = bgAlpha,
                             onValueChange = { newValue ->
                                 bgAlpha = newValue  // 更新透明度值
-                                reRenderFrame()  // 重新渲染
                             },
+                            onValueChangeFinished = { reRenderFrame() },
                             valueRange = 0f..255f,  // 范围 0-255
                             modifier = Modifier.weight(1f)
                         )
@@ -254,8 +254,8 @@ fun PhotoFrameApp() {
                             value = mainScale,
                             onValueChange = { newValue ->
                                 mainScale = newValue  // 更新图片大小比例
-                                reRenderFrame()  // 重新渲染
                             },
+                            onValueChangeFinished = { reRenderFrame() },
                             valueRange = 0.5f..1.0f,  // 范围 50%-100%
                             modifier = Modifier.weight(1f)
                         )
