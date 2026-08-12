@@ -30,6 +30,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -41,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
@@ -64,14 +67,22 @@ fun PhotoFrameApp() {
     var customWatermark by remember { mutableStateOf("") }  // 用户输入的水印
     var bgAlpha by remember { mutableFloatStateOf(122f) }  // 背景透明度 (0-255)
     var mainScale by remember { mutableFloatStateOf(0.85f) }  // 主体图大小 (0.5-1.0)
+    var renderedScale by remember { mutableFloatStateOf(0.85f) }  // 当前 Bitmap 实际渲染时对应的 mainScale 值
+
+    // 平滑缩放动画：拖动滑块时实时响应，松手后渲染真实 Bitmap
+    val animatedScale by animateFloatAsState(
+        targetValue = mainScale,
+        animationSpec = tween(durationMillis = 200),
+        label = "scaleAnimation"
+    )
 
     var isLoading by remember { mutableStateOf(false) }
 
     // 重新渲染相框（透明度或水印变化时调用）
+    // 注意：这里不设置 isLoading，保持旧图继续显示，等新图渲染完无缝替换，避免闪烁
     fun reRenderFrame() {
         val b = originalBitmap ?: return
         scope.launch {
-            isLoading = true
             // 确定水印内容：用户输入优先，否则用 EXIF
             val wmLines = if (customWatermark.isNotBlank()) {
                 listOf(customWatermark.trim())  // 只用用户输入的内容
@@ -83,9 +94,10 @@ fun PhotoFrameApp() {
             val composed = withContext(Dispatchers.IO) {
                 createGradientFrame(b, wmLines, bgAlpha.toInt(), mainScale)
             }
+            // 先更新缩放记录，再替换图片，保证 graphicsLayer 比例平滑过渡
+            renderedScale = mainScale
             frameBitmap?.recycle()
             frameBitmap = composed
-            isLoading = false
         }
     }
 
@@ -128,6 +140,7 @@ fun PhotoFrameApp() {
                         createGradientFrame(b, actualWm, bgAlpha.toInt(), mainScale)
                     }
                     frameBitmap = composed
+                    renderedScale = mainScale  // 记录首次渲染对应的 scale
                 }
 
                 isLoading = false
@@ -200,7 +213,11 @@ fun PhotoFrameApp() {
                             contentDescription = "相框预览",
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(16.dp),
+                                .padding(16.dp)
+                                .graphicsLayer {
+                                    scaleX = animatedScale / renderedScale
+                                    scaleY = animatedScale / renderedScale
+                                },
                             contentScale = ContentScale.Fit
                         )
                     }

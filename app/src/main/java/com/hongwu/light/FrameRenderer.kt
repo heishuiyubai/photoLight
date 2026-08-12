@@ -9,6 +9,8 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
@@ -40,6 +42,9 @@ private const val SHADOW_ALPHA = 140
 
 /** 水印文字区域高度比例：占画布高度的 15% */
 private const val WATERMARK_AREA_RATIO = 0.15f
+
+/** 主体图边缘羽化比例：边缘向内淡出的宽度占短边的比例 */
+private const val EDGE_FEATHER_RATIO = 0.07f
 
 // ==================== 主函数 ====================
 
@@ -126,17 +131,39 @@ private fun drawMainImage(canvas: Canvas, source: Bitmap, W: Int, H: Int, mainSc
     // 步骤1：先绘制投影阴影（在主体图下方）
     drawDropShadow(canvas, rect, cornerRadius)
 
-    // 步骤2：使用 BitmapShader 绘制圆角主体图
-    val shader = BitmapShader(source, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)  // 创建着色器
-    val matrix = Matrix()  // 创建变换矩阵
-    val scaleX = mainW / source.width  // 计算 X 轴缩放比例
-    val scaleY = mainH / source.height  // 计算 Y 轴缩放比例
-    matrix.setScale(scaleX, scaleY)  // 设置缩放
-    matrix.postTranslate(offsetX, offsetY)  // 设置平移到居中位置
-    shader.setLocalMatrix(matrix)  // 将变换矩阵应用到着色器
+    // 步骤2：在离屏 Bitmap 上绘制圆角主体图 + 边缘羽化
+    val layerW = mainW.toInt()
+    val layerH = mainH.toInt()
+    val layerBmp = Bitmap.createBitmap(layerW, layerH, Bitmap.Config.ARGB_8888)
+    val layerCanvas = Canvas(layerBmp)
 
-    paint.shader = shader  // 将着色器设置到画笔
-    canvas.drawRoundRect(rect, cornerRadius, cornerRadius, paint)  // 绘制圆角矩形
+    // 2a: 用 BitmapShader 绘制圆角矩形图片
+    val shader = BitmapShader(source, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+    val matrix = Matrix()
+    val scaleX = mainW / source.width
+    val scaleY = mainH / source.height
+    matrix.setScale(scaleX, scaleY)
+    shader.setLocalMatrix(matrix)
+    paint.shader = shader
+
+    val localRect = RectF(0f, 0f, mainW, mainH)
+    layerCanvas.drawRoundRect(localRect, cornerRadius, cornerRadius, paint)
+
+    // 2b: 使用 BlurMaskFilter + PorterDuff.DST_IN 实现边缘羽化
+    // 绘制一个略向内缩的圆角矩形遮罩并模糊其边缘，保持矩形形状，仅四边柔和淡出
+    val feather = min(min(mainW, mainH) * EDGE_FEATHER_RATIO, 100f)  // 羽化宽度（BlurMaskFilter 半径上限约 128）
+    val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)  // 保留重叠部分，透明区域擦除
+        maskFilter = BlurMaskFilter(feather, BlurMaskFilter.Blur.NORMAL)  // 模糊遮罩边缘
+    }
+    // 遮罩向内缩半个羽化宽度，使图片边界处透明度趋近 0，消除硬边
+    val half = feather / 2f
+    val maskRect = RectF(half, half, mainW - half, mainH - half)
+    layerCanvas.drawRoundRect(maskRect, cornerRadius, cornerRadius, maskPaint)
+
+    // 步骤3：将带羽化效果的图片绘制到主画布
+    canvas.drawBitmap(layerBmp, offsetX, offsetY, null)
+    layerBmp.recycle()
 }
 
 /**
