@@ -6,6 +6,7 @@ import androidx.exifinterface.media.ExifInterface
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.round
 
 /** 拍摄参数信息（扩展版） */
 data class ShotInfo(
@@ -75,21 +76,29 @@ fun buildWatermarkLines(context: Context, uri: Uri): List<String> {
 
 // -------- 格式化工具函数 --------
 
-/** 将曝光时间转为可读格式，如 "1/250s" 或 "2s" */
+/** 将曝光时间转为可读格式，不足 1 秒用 "1/10" 分数格式，≥1 秒用 "2s" */
 private fun formatShutterSpeed(raw: String): String {
-    val parts = raw.split("/")
-    if (parts.size == 2) {
+    // 统一换算成秒：兼容分数 "1/10" 与小数 "0.1" 两种 EXIF 存储格式
+    val seconds: Double = if (raw.contains("/")) {
+        val parts = raw.split("/")
         val num = parts[0].toDoubleOrNull() ?: return raw
         val den = parts[1].toDoubleOrNull() ?: return raw
-        return if (num >= den) {
-            val sec = num / den
-            if (sec == sec.toLong().toDouble()) "${sec.toLong()}s"
-            else String.format(Locale.US, "%.1fs", sec)
-        } else {
-            "1/${(den / num).toInt()}s"
-        }
+        if (den == 0.0) return raw
+        num / den
+    } else {
+        raw.toDoubleOrNull() ?: return raw
     }
-    return raw
+
+    if (seconds <= 0.0) return raw
+
+    return if (seconds < 1.0) {
+        // 不足 1 秒：转为 1/N 格式，如 0.1 -> 1/10、0.004 -> 1/250
+        "1/${round(1.0 / seconds).toInt()}"
+    } else {
+        // ≥1 秒：保留秒表示
+        if (seconds == seconds.toLong().toDouble()) "${seconds.toLong()}s"
+        else String.format(Locale.US, "%.1fs", seconds)
+    }
 }
 
 /** 将光圈值转为可读格式，如 "f/2.8" */
