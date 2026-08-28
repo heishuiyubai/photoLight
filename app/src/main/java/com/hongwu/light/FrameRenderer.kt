@@ -54,32 +54,50 @@ private const val EDGE_FEATHER_RATIO = 0.07f
  * @param watermarkLines 水印文字列表（第1行品牌型号，第2行拍摄参数）
  * @param bgAlpha 背景透明度 (0-255)，默认 122
  * @param mainScale 主体图缩放比例 (0-1)，默认 0.85
+ * @param rotation 旋转角度（90 的倍数），默认 0
  * @return 合成后的相框图片 Bitmap
  */
-fun createGradientFrame(source: Bitmap, watermarkLines: List<String>, bgAlpha: Int = DEFAULT_BG_ALPHA, mainScale: Float = DEFAULT_MAIN_SCALE): Bitmap {
-    // 获取原图宽度
-    val W = source.width
-    // 获取原图高度
-    val H = source.height
+fun createGradientFrame(source: Bitmap, watermarkLines: List<String>, bgAlpha: Int = DEFAULT_BG_ALPHA, mainScale: Float = DEFAULT_MAIN_SCALE, rotation: Int = 0): Bitmap {
+    // 若需要旋转，先得到旋转后的位图（90/270 会交换宽高）
+    val rotated = if (rotation % 360 == 0) source else rotateBitmap(source, rotation)
 
-    // 创建与原图同尺寸的画布 Bitmap
+    // 获取旋转后宽度
+    val W = rotated.width
+    // 获取旋转后高度
+    val H = rotated.height
+
+    // 创建与旋转图同尺寸的画布 Bitmap
     val result = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888)
     // 创建 Canvas 用于绘制
     val canvas = Canvas(result)
 
     // ---------- 第1层：绘制半透明背景（铺满画布） ----------
-    drawBlurredBackground(canvas, source, W, H, bgAlpha)
+    drawBlurredBackground(canvas, rotated, W, H, bgAlpha)
 
     // ---------- 第2层：绘制主体图片 ----------
     // 按 mainScale 缩放，在画布中居中显示，带圆角和柔和投影
-    drawMainImage(canvas, source, W, H, mainScale)
+    drawMainImage(canvas, rotated, W, H, mainScale)
 //
 //    // ---------- 第3层：绘制水印文字 ----------
 //    // 在底部区域显示 EXIF 拍摄参数
     drawWatermarkText(canvas, W, H, watermarkLines, mainScale)
 
+    // 回收临时旋转图（若不是原图）
+    if (rotated !== source) rotated.recycle()
+
     // 返回合成后的图片
     return result
+}
+
+/**
+ * 按指定角度（90 的倍数）旋转 Bitmap，返回新 Bitmap
+ * @param source 原始 Bitmap
+ * @param degrees 旋转角度
+ */
+private fun rotateBitmap(source: Bitmap, degrees: Int): Bitmap {
+    val matrix = Matrix()
+    matrix.postRotate(degrees.toFloat())  // 设置旋转角度
+    return Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
 }
 
 // ==================== 第1层：半透明背景 ====================
@@ -266,9 +284,9 @@ private fun drawWatermarkText(canvas: Canvas, W: Int, H: Int, lines: List<String
  * @param source 原始图片
  * @param watermarkLines 水印文字列表
  */
-fun saveComposedImage(context: Context, source: Bitmap, watermarkLines: List<String>, bgAlpha: Int = DEFAULT_BG_ALPHA, mainScale: Float = DEFAULT_MAIN_SCALE) {
+fun saveComposedImage(context: Context, source: Bitmap, watermarkLines: List<String>, bgAlpha: Int = DEFAULT_BG_ALPHA, mainScale: Float = DEFAULT_MAIN_SCALE, rotation: Int = 0) {
     // 生成合成后的相框图片
-    val composed = createGradientFrame(source, watermarkLines, bgAlpha, mainScale)
+    val composed = createGradientFrame(source, watermarkLines, bgAlpha, mainScale, rotation)
 
     // 创建 MediaStore 内容值
     val contentValues = ContentValues().apply {

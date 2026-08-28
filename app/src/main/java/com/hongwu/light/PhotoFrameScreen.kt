@@ -35,6 +35,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -67,6 +68,7 @@ fun PhotoFrameApp() {
     var customWatermark by remember { mutableStateOf("") }  // 用户输入的水印
     var bgAlpha by remember { mutableFloatStateOf(122f) }  // 背景透明度 (0-255)
     var mainScale by remember { mutableFloatStateOf(0.85f) }  // 主体图大小 (0.5-1.0)
+    var rotation by remember { mutableIntStateOf(0) }  // 图片旋转角度（90 的倍数）
     var renderedScale by remember { mutableFloatStateOf(0.85f) }  // 当前 Bitmap 实际渲染时对应的 mainScale 值
 
     // 平滑缩放动画：拖动滑块时实时响应，松手后渲染真实 Bitmap
@@ -92,7 +94,7 @@ fun PhotoFrameApp() {
             watermarkLines = wmLines
             // 合成相框
             val composed = withContext(Dispatchers.IO) {
-                createGradientFrame(b, wmLines, bgAlpha.toInt(), mainScale)
+                createGradientFrame(b, wmLines, bgAlpha.toInt(), mainScale, rotation)
             }
             // 先更新缩放记录，再替换图片，保证 graphicsLayer 比例平滑过渡
             renderedScale = mainScale
@@ -107,6 +109,9 @@ fun PhotoFrameApp() {
         uri?.let { selectedUri ->
             scope.launch {
                 isLoading = true
+
+                // 0. 新图片重置旋转角度
+                rotation = 0
 
                 // 1. 回收旧的 Bitmap，释放内存
                 frameBitmap?.recycle()
@@ -137,7 +142,7 @@ fun PhotoFrameApp() {
 
                     // 合成相框
                     val composed = withContext(Dispatchers.IO) {
-                        createGradientFrame(b, actualWm, bgAlpha.toInt(), mainScale)
+                        createGradientFrame(b, actualWm, bgAlpha.toInt(), mainScale, rotation)
                     }
                     frameBitmap = composed
                     renderedScale = mainScale  // 记录首次渲染对应的 scale
@@ -154,6 +159,13 @@ fun PhotoFrameApp() {
                 title = { Text(if (originalBitmap != null) "相框预览" else "图片相框") },
                 actions = {
                     if (originalBitmap != null && !isLoading) {
+                        // 旋转按钮：每次点击顺时针旋转 90°
+                        IconButton(onClick = {
+                            rotation = (rotation + 90) % 360
+                            reRenderFrame()
+                        }) {
+                            Text("⟳", fontSize = 20.sp, color = MaterialTheme.colorScheme.primary)
+                        }
                         IconButton(onClick = {
                             pickLauncher.launch(
                                 PickVisualMediaRequest(
@@ -174,7 +186,7 @@ fun PhotoFrameApp() {
                     scope.launch {
                         isLoading = true
                         withContext(Dispatchers.IO) {
-                            saveComposedImage(context, orig, watermarkLines, bgAlpha.toInt(), mainScale)
+                            saveComposedImage(context, orig, watermarkLines, bgAlpha.toInt(), mainScale, rotation)
                         }
                         isLoading = false
                         Toast.makeText(context, "已保存到相册", Toast.LENGTH_SHORT).show()
