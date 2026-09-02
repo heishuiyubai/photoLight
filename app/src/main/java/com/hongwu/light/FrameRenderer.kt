@@ -286,6 +286,7 @@ private const val SAVE_QUALITY = 95
 /**
  * 将已渲染好的相框图片保存到系统相册（JPEG 格式）
  * 直接复用预览中的位图，避免二次合成（更快且保证与预览一致）
+ * 如果需要改为png只需要把JPEG替换就可以
  * @param context Android Context
  * @param bitmap 已合成好的相框图片
  * @return 是否保存成功
