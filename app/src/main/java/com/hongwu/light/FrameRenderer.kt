@@ -14,22 +14,21 @@ import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
-import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import java.io.OutputStream
+import android.util.Log
 import kotlin.math.min
 
 // ==================== 常量配置区 ====================
 
 /** 主体图默认缩放比例：原图的 85% */
-private const val DEFAULT_MAIN_SCALE = 0.85f
+const val DEFAULT_MAIN_SCALE = 0.85f
 
 /** 圆角半径比例：相对于主体图短边的 4% */
 private const val CORNER_RADIUS_RATIO = 0.04f
 
 /** 背景默认透明度：原图作为背景时的 Alpha 值 (0-255)，122 ≈ 48% */
-private const val DEFAULT_BG_ALPHA = 122
+const val DEFAULT_BG_ALPHA = 122
 
 /** 投影阴影 Y 轴偏移量（像素） */
 private const val SHADOW_OFFSET_Y = 12f
@@ -278,44 +277,51 @@ private fun drawWatermarkText(canvas: Canvas, W: Int, H: Int, lines: List<String
 
 // ==================== 保存到相册 ====================
 
+/** 保存日志标签 */
+private const val TAG = "FrameRenderer"
+
+/** JPEG 保存质量 (0-100)，照片类图像 95 可在体积与画质间取得平衡 */
+private const val SAVE_QUALITY = 95
+
 /**
- * 将相框效果合成为完整图片并保存到系统相册
+ * 将已渲染好的相框图片保存到系统相册（JPEG 格式）
+ * 直接复用预览中的位图，避免二次合成（更快且保证与预览一致）
  * @param context Android Context
- * @param source 原始图片
- * @param watermarkLines 水印文字列表
+ * @param bitmap 已合成好的相框图片
+ * @return 是否保存成功
  */
-fun saveComposedImage(context: Context, source: Bitmap, watermarkLines: List<String>, bgAlpha: Int = DEFAULT_BG_ALPHA, mainScale: Float = DEFAULT_MAIN_SCALE, rotation: Int = 0) {
-    // 生成合成后的相框图片
-    val composed = createGradientFrame(source, watermarkLines, bgAlpha, mainScale, rotation)
-
-    // 创建 MediaStore 内容值
+fun saveComposedImage(context: Context, bitmap: Bitmap): Boolean {
+    val timestamp = System.currentTimeMillis()  // 时间戳：用于文件名与 EXIF 时间
     val contentValues = ContentValues().apply {
-        put(MediaStore.Images.Media.DISPLAY_NAME, "framed_${System.currentTimeMillis()}.png")  // 文件名
-        put(MediaStore.Images.Media.MIME_TYPE, "image/png")  // MIME 类型
+        put(MediaStore.Images.Media.DISPLAY_NAME, "framed_$timestamp.jpg")  // 文件名
+        put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")  // MIME 类型
         put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES)  // 保存路径：Pictures
-
-        // Android 10+ 使用 IS_PENDING 防止相册提前拉取未完成的图片
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            put(MediaStore.Images.Media.IS_PENDING, 1)  // 标记为待完成
-        }
+        put(MediaStore.Images.Media.DATE_ADDED, timestamp / 1000)  // 添加时间（秒）
+        put(MediaStore.Images.Media.DATE_TAKEN, timestamp)  // 拍摄时间（毫秒）
+        put(MediaStore.Images.Media.IS_PENDING, 1)  // 标记为待完成，防止相册提前拉取未写完的图片
     }
 
     val resolver = context.contentResolver  // 获取内容解析器
-    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)  // 插入记录
-
-    uri?.let { mediaUri ->
-        // 打开输出流并写入 PNG 数据
-        resolver.openOutputStream(mediaUri)?.use { os: OutputStream ->
-            composed.compress(Bitmap.CompressFormat.PNG, 100, os)  // 压缩为 PNG（100% 质量）
-        }
-
-        // Android 10+ 写入完成后解除 IS_PENDING 状态
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            contentValues.clear()  // 清空内容值
-            contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)  // 标记为完成
-            resolver.update(mediaUri, contentValues, null, null)  // 更新记录
-        }
+    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+    if (uri == null) {
+        Log.e(TAG, "保存图片失败：无法创建相册记录")
+        return false
     }
 
-    composed.recycle()  // 回收合成图片，释放内存
+    return try {
+        // 打开输出流并写入 JPEG 数据
+        val os = resolver.openOutputStream(uri) ?: throw java.io.IOException("无法打开输出流")
+        os.use { bitmap.compress(Bitmap.CompressFormat.JPEG, SAVE_QUALITY, it) }
+
+        // 写入完成后解除 IS_PENDING 状态，相册即可见
+        contentValues.clear()  // 清空内容值
+        contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)  // 标记为完成
+        resolver.update(uri, contentValues, null, null)  // 更新记录
+        true
+    } catch (e: Exception) {
+        Log.e(TAG, "保存图片失败", e)
+        // 写入失败时删除记录，避免相册留下空/孤儿条目
+        resolver.delete(uri, null, null)
+        false
+    }
 }

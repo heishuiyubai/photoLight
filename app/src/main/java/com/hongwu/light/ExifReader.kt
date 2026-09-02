@@ -76,15 +76,21 @@ fun buildWatermarkLines(context: Context, uri: Uri): List<String> {
 
 // -------- 格式化工具函数 --------
 
+/** 解析 "分子/分母" 形式的分数为 Double，解析失败或分母为 0 时返回 null */
+private fun parseRatio(raw: String): Double? {
+    val parts = raw.split("/")
+    if (parts.size != 2) return null
+    val num = parts[0].toDoubleOrNull() ?: return null
+    val den = parts[1].toDoubleOrNull() ?: return null
+    if (den == 0.0) return null
+    return num / den
+}
+
 /** 将曝光时间转为可读格式，不足 1 秒用 "1/10" 分数格式，≥1 秒用 "2s" */
 private fun formatShutterSpeed(raw: String): String {
     // 统一换算成秒：兼容分数 "1/10" 与小数 "0.1" 两种 EXIF 存储格式
     val seconds: Double = if (raw.contains("/")) {
-        val parts = raw.split("/")
-        val num = parts[0].toDoubleOrNull() ?: return raw
-        val den = parts[1].toDoubleOrNull() ?: return raw
-        if (den == 0.0) return raw
-        num / den
+        parseRatio(raw) ?: return raw
     } else {
         raw.toDoubleOrNull() ?: return raw
     }
@@ -103,26 +109,14 @@ private fun formatShutterSpeed(raw: String): String {
 
 /** 将光圈值转为可读格式，如 "f/2.8" */
 private fun formatAperture(raw: String): String {
-    val parts = raw.split("/")
-    if (parts.size == 2) {
-        val num = parts[0].toDoubleOrNull() ?: return raw
-        val den = parts[1].toDoubleOrNull() ?: return raw
-        val fVal = num / den
-        return if (fVal == fVal.toLong().toDouble()) "f/${fVal.toLong()}"
-        else String.format(Locale.US, "f/%.1f", fVal)
-    }
-    return raw
+    val fVal = parseRatio(raw) ?: return raw
+    return if (fVal == fVal.toLong().toDouble()) "f/${fVal.toLong()}"
+    else String.format(Locale.US, "f/%.1f", fVal)
 }
 
 /** 将焦距转为可读格式，如 "24mm" */
 private fun formatFocalLength(raw: String): String {
-    val parts = raw.split("/")
-    if (parts.size == 2) {
-        val num = parts[0].toDoubleOrNull() ?: return raw
-        val den = parts[1].toDoubleOrNull() ?: return raw
-        val mm = num / den
-        return if (mm == mm.toLong().toDouble()) "${mm.toLong()}mm"
-        else String.format(Locale.US, "%.1fmm", mm)
-    }
-    return raw
+    val mm = parseRatio(raw) ?: return raw
+    return if (mm == mm.toLong().toDouble()) "${mm.toLong()}mm"
+    else String.format(Locale.US, "%.1fmm", mm)
 }
