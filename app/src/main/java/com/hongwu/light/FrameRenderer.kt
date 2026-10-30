@@ -283,19 +283,32 @@ private const val TAG = "FrameRenderer"
 /** JPEG 保存质量 (0-100)，照片类图像 95 可在体积与画质间取得平衡 */
 private const val SAVE_QUALITY = 95
 
+/** 图片导出格式规则：PNG（无损）或 JPG（有损压缩，体积小） */
+enum class ExportFormat(val label: String) {
+    PNG("PNG"),  // 无损格式，保留 Alpha 通道，文件较大
+    JPG("JPG")   // 有损压缩格式，照片类体积小画质好
+}
+
 /**
- * 将已渲染好的相框图片保存到系统相册（JPEG 格式）
+ * 将已渲染好的相框图片保存到系统相册
  * 直接复用预览中的位图，避免二次合成（更快且保证与预览一致）
- * 如果需要改为png只需要把JPEG替换就可以
  * @param context Android Context
  * @param bitmap 已合成好的相框图片
+ * @param format 导出格式规则（PNG/JPG），默认 JPG
  * @return 是否保存成功
  */
-fun saveComposedImage(context: Context, bitmap: Bitmap): Boolean {
+fun saveComposedImage(
+    context: Context,
+    bitmap: Bitmap,
+    format: ExportFormat = ExportFormat.JPG
+): Boolean {
     val timestamp = System.currentTimeMillis()  // 时间戳：用于文件名与 EXIF 时间
+    // 根据所选格式确定文件扩展名与 MIME 类型
+    val ext = if (format == ExportFormat.PNG) "png" else "jpg"  // 文件扩展名
+    val mime = if (format == ExportFormat.PNG) "image/png" else "image/jpeg"  // MIME 类型
     val contentValues = ContentValues().apply {
-        put(MediaStore.Images.Media.DISPLAY_NAME, "framed_$timestamp.jpg")  // 文件名
-        put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")  // MIME 类型
+        put(MediaStore.Images.Media.DISPLAY_NAME, "framed_$timestamp.$ext")  // 文件名（含格式后缀）
+        put(MediaStore.Images.Media.MIME_TYPE, mime)  // MIME 类型
         put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES)  // 保存路径：Pictures
         put(MediaStore.Images.Media.DATE_ADDED, timestamp / 1000)  // 添加时间（秒）
         put(MediaStore.Images.Media.DATE_TAKEN, timestamp)  // 拍摄时间（毫秒）
@@ -310,9 +323,10 @@ fun saveComposedImage(context: Context, bitmap: Bitmap): Boolean {
     }
 
     return try {
-        // 打开输出流并写入 JPEG 数据
+        // 打开输出流，按所选格式写入图片数据（PNG 无损、忽略质量参数；JPG 按 SAVE_QUALITY 压缩）
+        val compressFormat = if (format == ExportFormat.PNG) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG  // 系统压缩格式
         val os = resolver.openOutputStream(uri) ?: throw java.io.IOException("无法打开输出流")
-        os.use { bitmap.compress(Bitmap.CompressFormat.JPEG, SAVE_QUALITY, it) }
+        os.use { bitmap.compress(compressFormat, SAVE_QUALITY, it) }
 
         // 写入完成后解除 IS_PENDING 状态，相册即可见
         contentValues.clear()  // 清空内容值

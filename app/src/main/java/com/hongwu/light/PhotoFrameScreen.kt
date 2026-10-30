@@ -24,6 +24,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -61,10 +62,15 @@ fun PhotoFrameApp(viewModel: PhotoFrameViewModel = viewModel()) {
         label = "scaleAnimation"
     )
 
-    // 提示消息（保存成功/失败、图片加载失败）
+    // 提示消息（保存成功/失败、图片加载失败），成功消息带格式参数（PNG/JPG）
     uiState.messageResId?.let { resId ->
         LaunchedEffect(resId) {
-            Toast.makeText(context, resId, Toast.LENGTH_SHORT).show()
+            val text = if (uiState.messageArgs.isNotEmpty()) {
+                context.getString(resId, *uiState.messageArgs)  // 格式化提示（如"已保存到相册（PNG）"）
+            } else {
+                context.getString(resId)  // 无参数提示
+            }
+            Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
             viewModel.onMessageShown()
         }
     }
@@ -210,6 +216,26 @@ fun PhotoFrameApp(viewModel: PhotoFrameViewModel = viewModel()) {
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // 导出格式选择行：PNG（无损）/ JPG（压缩，体积小）
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(stringResource(R.string.label_export_format), fontSize = 14.sp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        ExportFormat.entries.forEach { format ->
+                            val selected = uiState.exportFormat == format  // 是否为当前选中格式
+                            FilterChip(
+                                selected = selected,
+                                onClick = { viewModel.onExportFormatChanged(format) },  // 切换导出格式
+                                label = { Text(format.label, fontSize = 13.sp) },
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                        }
+                    }
                 }
             }
         }

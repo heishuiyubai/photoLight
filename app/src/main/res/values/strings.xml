@@ -5,7 +5,7 @@
     <string name="title_home">图片相框</string>
     <!-- 操作与提示 -->
     <string name="action_save">保存</string>
-    <string name="save_success">已保存到相册</string>
+    <string name="save_success">已保存到相册（%1$s）</string>
     <string name="save_failed">保存失败，请重试</string>
     <string name="frame_generating">相框生成中…</string>
     <string name="load_failed">图片加载失败，请重试</string>
@@ -17,4 +17,5 @@
     <string name="label_bg_alpha">背景透明度</string>
     <string name="label_image_size">图片大小</string>
     <string name="watermark_input_label">自定义水印（留空则显示 EXIF 信息）</string>
+    <string name="label_export_format">导出格式</string>
 </resources>

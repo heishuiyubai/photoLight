@@ -35,8 +35,10 @@ data class FrameUiState(
     val mainScale: Float = DEFAULT_MAIN_SCALE,        // 主体图大小 (0.5-1.0)
     val rotation: Int = 0,                    // 图片旋转角度（90 的倍数）
     val renderedScale: Float = DEFAULT_MAIN_SCALE,    // 当前 frameBitmap 实际渲染时对应的 mainScale
+    val exportFormat: ExportFormat = ExportFormat.JPG,  // 导出图片格式规则（PNG/JPG）
     val isLoading: Boolean = false,           // 是否正在加载/保存
-    val messageResId: Int? = null             // 一次性提示消息的字符串资源 ID
+    val messageResId: Int? = null,            // 一次性提示消息的字符串资源 ID
+    val messageArgs: Array<String> = emptyArray()  // 提示消息的格式化参数（如格式名称）
 )
 
 /**
@@ -114,17 +116,24 @@ class PhotoFrameViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    /** 切换导出图片格式规则（PNG/JPG） */
+    fun onExportFormatChanged(format: ExportFormat) {
+        _uiState.update { it.copy(exportFormat = format) }
+    }
+
     /** 保存当前预览的相框图到相册 */
     fun save() {
         val frame = _uiState.value.frameBitmap ?: return
+        val format = _uiState.value.exportFormat  // 用户所选的导出格式
         val app = getApplication<Application>()
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
-            val success = withContext(Dispatchers.IO) { saveComposedImage(app, frame) }
+            val success = withContext(Dispatchers.IO) { saveComposedImage(app, frame, format) }
             _uiState.update {
                 it.copy(
                     isLoading = false,
-                    messageResId = if (success) R.string.save_success else R.string.save_failed
+                    messageResId = if (success) R.string.save_success else R.string.save_failed,
+                    messageArgs = if (success) arrayOf(format.label) else emptyArray()  // 成功时提示携带格式名
                 )
             }
         }
@@ -132,7 +141,7 @@ class PhotoFrameViewModel(application: Application) : AndroidViewModel(applicati
 
     /** 提示消息展示后清除，避免重组时重复弹出 */
     fun onMessageShown() {
-        _uiState.update { it.copy(messageResId = null) }
+        _uiState.update { it.copy(messageResId = null, messageArgs = emptyArray()) }
     }
 
     // 重新渲染相框（透明度、大小、旋转或水印变化时调用）
