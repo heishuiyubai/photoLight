@@ -118,8 +118,11 @@ private const val THUMB_MAX_SIDE = 480
 /** 底板背景目标亮度 (0-255)：照片均色压暗到该亮度后作为背景 */
 private const val DARK_TARGET_LUMA = 40
 
-/** 底板照片上边距占垂直剩余空间的比例：值越小照片越靠上 */
-private const val DARK_TOP_WEIGHT = 0.27f
+/** 底板照片上边距基准比例（留白系数为 1 时）占画布短边的比例，与白框同为短边基准 */
+private const val DARK_TOP_RATIO = 0.049f
+
+/** 底板文字带基准比例（留白系数为 1 时）占画布短边的比例 */
+private const val DARK_BAND_RATIO = 0.133f
 
 /** 底板圆角半径占照片短边的比例 */
 private const val DARK_CORNER_RATIO = 0.021f
@@ -410,9 +413,10 @@ fun createStyleThumb(source: Bitmap, style: FrameStyle, watermarkLines: List<Str
 /**
  * 生成暗色底板风格相框
  * 画布尺寸等于原图尺寸，背景由照片均色压暗得到，照片居中偏上、带圆角与柔和投影
+ * 照片缩放与白框共用同一套留白系数映射：mainScale 越小留白越厚、照片越小，照片始终等比完整显示不裁切
  * @param source 原始图片 Bitmap
  * @param watermarkLines 水印文本三段：品牌 / 型号 / 参数（品牌与型号同处一行混排）
- * @param mainScale 照片占画布宽高的比例
+ * @param mainScale 留白控制参数，值越小留白越厚
  * @param rotation 旋转角度（90 的倍数）
  */
 private fun createDarkPlateFrame(source: Bitmap, watermarkLines: List<String>, mainScale: Float, rotation: Int): Bitmap {
@@ -430,34 +434,44 @@ private fun createDarkPlateFrame(source: Bitmap, watermarkLines: List<String>, m
     // 背景层：取照片平均色并压暗到目标亮度，使底板色调跟随照片
     canvas.drawColor(darkenToTargetLuma(averageColor(rotated), DARK_TARGET_LUMA))
 
-    // 照片尺寸：按 mainScale 缩放
-    val mainW = (W * mainScale).toFloat()  // 照片宽度
-    val mainH = (H * mainScale).toFloat()  // 照片高度
+    // 以画布短边为留白基准，与白框一致，保证横图与竖图的留白观感相同
+    val shortSide = min(W.toFloat(), H.toFloat())  // 画布短边长度
 
-    // 水平居中，垂直方向把剩余空间按 DARK_TOP_WEIGHT 分配给上边距，实现居中偏上
-    val offsetX = (W - mainW) / 2f  // X 轴偏移
-    val offsetY = (H - mainH) * DARK_TOP_WEIGHT  // Y 轴偏移：上边距小于下边距
+    // 留白系数：与白框共用同一套 mainScale 映射，两种风格的缩放手感完全一致
+    val padScale = ((1f - mainScale) / MOUNT_PAD_BASE).coerceIn(MOUNT_PAD_MIN, MOUNT_PAD_MAX)  // 留白缩放系数
+
+    // 上边距与文字带厚度都随留白系数等比缩放
+    val topPad = shortSide * DARK_TOP_RATIO * padScale  // 照片上边距
+    val bandH = shortSide * DARK_BAND_RATIO * padScale  // 底部文字带高度
+
+    // 照片高度恰好铺满上边距与文字带之间的区域，宽度按原图宽高比推导，无需钳制也不会越界
+    val photoH = H - topPad - bandH  // 照片高度
+    val photoW = photoH * W.toFloat() / H.toFloat()  // 照片宽度（等比缩放，不裁切不拉伸）
+
+    // 水平居中，顶边贴在上边距处
+    val offsetX = (W - photoW) / 2f  // X 轴偏移
+    val offsetY = topPad  // Y 轴偏移：固定上边距
 
     // 照片矩形与圆角半径（短边比例）
-    val rect = RectF(offsetX, offsetY, offsetX + mainW, offsetY + mainH)  // 照片区域
-    val shortSide = min(mainW, mainH)  // 照片短边
-    val cornerRadius = shortSide * DARK_CORNER_RATIO  // 圆角半径
+    val rect = RectF(offsetX, offsetY, offsetX + photoW, offsetY + photoH)  // 照片区域
+    val rectShortSide = min(photoW, photoH)  // 照片短边
+    val cornerRadius = rectShortSide * DARK_CORNER_RATIO  // 圆角半径
 
     // 先绘制照片下方的柔和投影
     drawDropShadow(
         canvas,  // 主画布
         rect,  // 照片矩形
         cornerRadius,  // 与照片一致的圆角
-        blur = shortSide * DARK_SHADOW_BLUR_RATIO,  // 模糊半径
+        blur = rectShortSide * DARK_SHADOW_BLUR_RATIO,  // 模糊半径
         alpha = DARK_SHADOW_ALPHA,  // 投影透明度
-        offsetY = shortSide * DARK_SHADOW_OFFSET_RATIO  // 投影下移量
+        offsetY = rectShortSide * DARK_SHADOW_OFFSET_RATIO  // 投影下移量
     )
 
-    // 绘制圆角照片（直接画在主画布，不做边缘羽化）
+    // 绘制圆角照片（整图等比缩放后贴入，直接画在主画布，不做边缘羽化）
     drawRoundedImage(canvas, rotated, rect, cornerRadius)
 
-    // 在照片下方的底板区域绘制两行浅色文字
-    drawPlateWatermark(canvas, W, H, rect.bottom, watermarkLines)
+    // 在照片下方的文字带内绘制两行浅色文字
+    drawPlateWatermark(canvas, W, H, topPad + photoH, watermarkLines)
 
     // 回收临时旋转图（若不是原图）
     if (rotated !== source) rotated.recycle()
@@ -466,16 +480,18 @@ private fun createDarkPlateFrame(source: Bitmap, watermarkLines: List<String>, m
 }
 
 /**
- * 绘制圆角照片：用 BitmapShader 把原图映射到圆角矩形，不做羽化
+ * 绘制圆角照片：用 BitmapShader 把原图完整映射到圆角矩形，不做羽化
+ * 着色器坐标需先缩放再平移到矩形原点，否则原图会从画布原点开始取样导致画面被截取
  */
 private fun drawRoundedImage(canvas: Canvas, source: Bitmap, rect: RectF, cornerRadius: Float) {
     // 创建画笔并开启抗锯齿
     val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     // 用原图做着色器，边缘裁切不外铺
     val shader = BitmapShader(source, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
-    // 缩放矩阵把原图映射到目标矩形
+    // 映射矩阵：先把原图缩放到目标矩形尺寸，再平移使原图左上角与矩形左上角重合
     val matrix = Matrix()
-    matrix.setScale(rect.width() / source.width, rect.height() / source.height)
+    matrix.setScale(rect.width() / source.width, rect.height() / source.height)  // 缩放
+    matrix.postTranslate(rect.left, rect.top)  // 平移对齐矩形原点
     shader.setLocalMatrix(matrix)
     paint.shader = shader
     // 绘制圆角矩形，一次成型无需离屏位图

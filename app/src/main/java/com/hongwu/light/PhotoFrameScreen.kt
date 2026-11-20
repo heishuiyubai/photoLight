@@ -222,8 +222,11 @@ private fun FrameContent(
                             .fillMaxWidth()
                             .padding(16.dp)
                             .graphicsLayer {
-                                scaleX = animatedScale / uiState.renderedScale
-                                scaleY = animatedScale / uiState.renderedScale
+                                // 仅渐变风格用整图缩放做拖动过渡；白框与暗色的边框和水印需固定，缩放整图会让位置漂移
+                                if (uiState.style == FrameStyle.GRADIENT) {
+                                    scaleX = animatedScale / uiState.renderedScale
+                                    scaleY = animatedScale / uiState.renderedScale
+                                }
                             },
                         contentScale = ContentScale.Fit
                     )
