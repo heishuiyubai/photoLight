@@ -53,6 +53,7 @@ fun readExifInfo(context: Context, uri: Uri): ShotInfo {
 fun buildWatermarkLines(info: ShotInfo, style: FrameStyle, custom: String = ""): List<String> = when (style) {
     FrameStyle.GRADIENT -> buildGradientLines(info, custom)  // 渐变风格水印
     FrameStyle.WHITE_MOUNT -> buildMountLines(info, custom)  // 展框风格水印
+    FrameStyle.DARK_PLATE -> buildDarkPlateLines(info, custom)  // 暗色底板风格水印
 }
 
 /** 品牌标语表：仅收录已确认无误的品牌，未命中则不显示标语行 */
@@ -118,6 +119,37 @@ private fun buildMountLines(info: ShotInfo, custom: String): List<String> {
 /** 无任何 EXIF 信息时使用的兜底文本行 */
 private fun currentTimestampLine(): String =
     SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+
+/** 暗色底板风格水印：固定返回三段 [品牌, 型号, 参数]，渲染时品牌与型号同处一行混排 */
+private fun buildDarkPlateLines(info: ShotInfo, custom: String): List<String> {
+    // 参数段：焦距 光圈 快门 ISO，单空格分隔
+    val params = listOfNotNull(info.focalLength, info.aperture, info.shutter, info.iso)
+        .joinToString(" ")
+
+    // 自定义水印整体占据品牌段，此时不再拼接型号，避免与用户输入混排
+    val customBrand = custom.trim().takeIf { it.isNotEmpty() }
+
+    // 品牌段：EXIF Make 常为全大写，转为首字母大写以贴合该风格的排版
+    val brand = toTitleCase(customBrand ?: info.brand?.trim().orEmpty())
+
+    // 型号段：保留厂商原始写法（如 "d5300"）
+    val model = if (customBrand != null) "" else info.model?.trim().orEmpty()
+
+    // 三段全空时用时间戳兜底，保证渲染端下标始终可用
+    if (brand.isEmpty() && model.isEmpty() && params.isEmpty()) {
+        return listOf(currentTimestampLine(), "", "")
+    }
+    return listOf(brand, model, params)
+}
+
+/** 全大写字符串转首字母大写，如 "NIKON" 转为 "Nikon"；其他写法原样保留 */
+private fun toTitleCase(raw: String): String {
+    if (raw.isEmpty()) return raw  // 空串直接返回
+    // 仅处理纯大写输入，避免破坏 "EOS R5" 这类已有大小写的品牌名
+    val allUpper = raw.any { it.isLetter() } && raw == raw.uppercase(Locale.ROOT)
+    if (!allUpper) return raw
+    return raw.lowercase(Locale.ROOT).replaceFirstChar { it.uppercaseChar() }  // 首字母大写
+}
 
 // -------- 格式化工具函数 --------
 

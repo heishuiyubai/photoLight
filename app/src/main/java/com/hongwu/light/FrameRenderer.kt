@@ -113,12 +113,54 @@ private const val MOUNT_TEXT3_SPACING = 0.05f
 /** 缩略图最长边像素：风格预览条使用的小图尺寸 */
 private const val THUMB_MAX_SIDE = 480
 
+// ==================== 暗色底板风格常量 ====================
+
+/** 底板背景目标亮度 (0-255)：照片均色压暗到该亮度后作为背景 */
+private const val DARK_TARGET_LUMA = 40
+
+/** 底板照片上边距占垂直剩余空间的比例：值越小照片越靠上 */
+private const val DARK_TOP_WEIGHT = 0.27f
+
+/** 底板圆角半径占照片短边的比例 */
+private const val DARK_CORNER_RATIO = 0.021f
+
+/** 底板投影模糊半径占照片短边的比例 */
+private const val DARK_SHADOW_BLUR_RATIO = 0.025f
+
+/** 底板投影透明度 (0-255)：深底上的投影需比白底更实 */
+private const val DARK_SHADOW_ALPHA = 70
+
+/** 底板投影 Y 轴偏移占照片短边的比例 */
+private const val DARK_SHADOW_OFFSET_RATIO = 0.008f
+
+/** 底板文字带高度比例：品牌行字号占文字带高度的比例 */
+private const val DARK_TEXT1_SIZE_RATIO = 0.19f
+
+/** 底板文字带高度比例：参数行字号占文字带高度的比例 */
+private const val DARK_TEXT2_SIZE_RATIO = 0.14f
+
+/** 底板品牌行中心在文字带内的位置比例 */
+private const val DARK_LINE1_POS = 0.34f
+
+/** 底板参数行中心在文字带内的位置比例 */
+private const val DARK_LINE2_POS = 0.55f
+
+/** 底板品牌行文字颜色：浅灰白，保证在深底上可读 */
+private val DARK_TEXT_BRAND_COLOR = Color.rgb(232, 228, 226)
+
+/** 底板参数行文字颜色：比品牌行略暗，拉开层次 */
+private val DARK_TEXT_PARAMS_COLOR = Color.rgb(168, 162, 158)
+
+/** 底板背景取色用的缩略尺寸：越小越快，均值精度足够 */
+private const val DARK_AVG_SAMPLE_SIZE = 32
+
 // ==================== 相框风格 ====================
 
 /** 相框风格：不同风格的画布构造方式与绘制层完全不同 */
 enum class FrameStyle(val label: String) {
     GRADIENT("渐变"),      // 原图半透明铺底 + 圆角羽化 + 投影（项目原有风格）
-    WHITE_MOUNT("白框")    // 白色扩画布 + 硬边照片 + 底部三行黑色文字（展框风格）
+    WHITE_MOUNT("白框"),    // 白色扩画布 + 硬边照片 + 底部三行黑色文字（展框风格）
+    DARK_PLATE("暗色")      // 照片主色派生的深色底板 + 偏上圆角照片 + 两行浅色文字
 }
 
 // ==================== 主函数 ====================
@@ -145,6 +187,8 @@ fun createFrame(
     FrameStyle.GRADIENT -> createGradientFrame(source, watermarkLines, bgAlpha, mainScale, rotation)
     // 展框风格：画布尺寸等于照片加边框，需向外扩展
     FrameStyle.WHITE_MOUNT -> createWhiteMountFrame(source, watermarkLines, mainScale, rotation)
+    // 暗色底板风格：画布尺寸等于原图尺寸，背景改为照片主色派生的深色
+    FrameStyle.DARK_PLATE -> createDarkPlateFrame(source, watermarkLines, mainScale, rotation)
 }
 
 /**
@@ -359,6 +403,196 @@ fun createStyleThumb(source: Bitmap, style: FrameStyle, watermarkLines: List<Str
     if (small !== source) small.recycle()
 
     return thumb
+}
+
+// ==================== 暗色底板风格 ====================
+
+/**
+ * 生成暗色底板风格相框
+ * 画布尺寸等于原图尺寸，背景由照片均色压暗得到，照片居中偏上、带圆角与柔和投影
+ * @param source 原始图片 Bitmap
+ * @param watermarkLines 水印文本三段：品牌 / 型号 / 参数（品牌与型号同处一行混排）
+ * @param mainScale 照片占画布宽高的比例
+ * @param rotation 旋转角度（90 的倍数）
+ */
+private fun createDarkPlateFrame(source: Bitmap, watermarkLines: List<String>, mainScale: Float, rotation: Int): Bitmap {
+    // 若需要旋转，先得到旋转后的位图（90/270 会交换宽高）
+    val rotated = if (rotation % 360 == 0) source else rotateBitmap(source, rotation)
+
+    // 画布尺寸等于旋转后的原图尺寸
+    val W = rotated.width  // 画布宽度
+    val H = rotated.height  // 画布高度
+
+    // 创建画布 Bitmap
+    val result = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(result)
+
+    // 背景层：取照片平均色并压暗到目标亮度，使底板色调跟随照片
+    canvas.drawColor(darkenToTargetLuma(averageColor(rotated), DARK_TARGET_LUMA))
+
+    // 照片尺寸：按 mainScale 缩放
+    val mainW = (W * mainScale).toFloat()  // 照片宽度
+    val mainH = (H * mainScale).toFloat()  // 照片高度
+
+    // 水平居中，垂直方向把剩余空间按 DARK_TOP_WEIGHT 分配给上边距，实现居中偏上
+    val offsetX = (W - mainW) / 2f  // X 轴偏移
+    val offsetY = (H - mainH) * DARK_TOP_WEIGHT  // Y 轴偏移：上边距小于下边距
+
+    // 照片矩形与圆角半径（短边比例）
+    val rect = RectF(offsetX, offsetY, offsetX + mainW, offsetY + mainH)  // 照片区域
+    val shortSide = min(mainW, mainH)  // 照片短边
+    val cornerRadius = shortSide * DARK_CORNER_RATIO  // 圆角半径
+
+    // 先绘制照片下方的柔和投影
+    drawDropShadow(
+        canvas,  // 主画布
+        rect,  // 照片矩形
+        cornerRadius,  // 与照片一致的圆角
+        blur = shortSide * DARK_SHADOW_BLUR_RATIO,  // 模糊半径
+        alpha = DARK_SHADOW_ALPHA,  // 投影透明度
+        offsetY = shortSide * DARK_SHADOW_OFFSET_RATIO  // 投影下移量
+    )
+
+    // 绘制圆角照片（直接画在主画布，不做边缘羽化）
+    drawRoundedImage(canvas, rotated, rect, cornerRadius)
+
+    // 在照片下方的底板区域绘制两行浅色文字
+    drawPlateWatermark(canvas, W, H, rect.bottom, watermarkLines)
+
+    // 回收临时旋转图（若不是原图）
+    if (rotated !== source) rotated.recycle()
+
+    return result
+}
+
+/**
+ * 绘制圆角照片：用 BitmapShader 把原图映射到圆角矩形，不做羽化
+ */
+private fun drawRoundedImage(canvas: Canvas, source: Bitmap, rect: RectF, cornerRadius: Float) {
+    // 创建画笔并开启抗锯齿
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    // 用原图做着色器，边缘裁切不外铺
+    val shader = BitmapShader(source, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+    // 缩放矩阵把原图映射到目标矩形
+    val matrix = Matrix()
+    matrix.setScale(rect.width() / source.width, rect.height() / source.height)
+    shader.setLocalMatrix(matrix)
+    paint.shader = shader
+    // 绘制圆角矩形，一次成型无需离屏位图
+    canvas.drawRoundRect(rect, cornerRadius, cornerRadius, paint)
+}
+
+/**
+ * 绘制暗色底板文字：第1行品牌（衬线粗斜体）与型号（系统字体）混排并整体居中，第2行为拍摄参数
+ * @param photoBottom 照片底边 Y 坐标，文字带为照片底边到画布底边之间的区域
+ */
+private fun drawPlateWatermark(canvas: Canvas, W: Int, H: Int, photoBottom: Float, lines: List<String>) {
+    // 文字带高度：照片底边到画布底边
+    val bandH = H - photoBottom  // 文字带高度
+    if (bandH <= 0f) return  // 照片铺满时没有地方放文字
+
+    // 三段文本：品牌、型号、参数
+    val brand = lines.getOrElse(0) { "" }  // 品牌段
+    val model = lines.getOrElse(1) { "" }  // 型号段
+    val params = lines.getOrElse(2) { "" }  // 参数段
+    if (brand.isEmpty() && model.isEmpty() && params.isEmpty()) return  // 无内容直接返回
+
+    // 画布水平中心
+    val centerX = W / 2f
+
+    // 品牌画笔：衬线粗斜体，浅色保证可读
+    val brandPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = Paint.Align.LEFT  // 分段左对齐绘制，便于整行居中
+        typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC)  // 衬线粗斜体
+        color = DARK_TEXT_BRAND_COLOR  // 浅灰白
+        textSize = bandH * DARK_TEXT1_SIZE_RATIO  // 字号按带高计算
+    }
+    // 型号画笔：跟随系统默认字体，与品牌同字号同基线
+    val modelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = Paint.Align.LEFT  // 分段左对齐
+        typeface = Typeface.DEFAULT  // 系统默认字体
+        color = DARK_TEXT_BRAND_COLOR  // 与品牌同色
+        textSize = brandPaint.textSize  // 同字号
+    }
+
+    // 分别测量两段宽度与中间空格，得到整行总宽以便居中
+    val spaceWidth = brandPaint.measureText(" ")  // 空格宽度
+    val brandWidth = brandPaint.measureText(brand)  // 品牌段宽度
+    val modelWidth = if (model.isEmpty()) 0f else modelPaint.measureText(model)  // 型号段宽度
+    val gap = if (model.isEmpty()) 0f else spaceWidth  // 两段之间的空格
+    val totalWidth = brandWidth + gap + modelWidth  // 整行宽度
+
+    // 第1行基线：按字体度量把行的视觉中心对齐到文字带的 DARK_LINE1_POS 处
+    val fm = brandPaint.fontMetrics  // 字体度量
+    val baseline1 = photoBottom + bandH * DARK_LINE1_POS - (fm.ascent + fm.descent) / 2f  // 第1行基线
+
+    // 从整行左端开始依次绘制两段
+    var x = centerX - totalWidth / 2f  // 当前绘制起点
+    if (brand.isNotEmpty()) {
+        canvas.drawText(brand, x, baseline1, brandPaint)  // 品牌段
+        x += brandWidth + gap  // 前进到型号段起点
+    }
+    if (model.isNotEmpty()) {
+        canvas.drawText(model, x, baseline1, modelPaint)  // 型号段
+    }
+
+    // 第2行：拍摄参数，居中对齐、颜色更暗以拉开层次
+    if (params.isNotEmpty()) {
+        val paramsPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textAlign = Paint.Align.CENTER  // 整行居中
+            typeface = Typeface.DEFAULT  // 系统默认字体
+            color = DARK_TEXT_PARAMS_COLOR  // 次级浅灰
+            textSize = bandH * DARK_TEXT2_SIZE_RATIO  // 字号按带高计算
+        }
+        val fm2 = paramsPaint.fontMetrics  // 参数行字体度量
+        val baseline2 = photoBottom + bandH * DARK_LINE2_POS - (fm2.ascent + fm2.descent) / 2f  // 第2行基线
+        canvas.drawText(params, centerX, baseline2, paramsPaint)  // 绘制参数行
+    }
+}
+
+/**
+ * 计算位图的平均颜色：先缩到小尺寸再逐像素求均值，避免全图扫描
+ */
+private fun averageColor(source: Bitmap): Int {
+    // 等比缩小到固定小尺寸，缩放过程本身即是一次面积平均
+    val small = Bitmap.createScaledBitmap(source, DARK_AVG_SAMPLE_SIZE, DARK_AVG_SAMPLE_SIZE, true)
+    var r = 0L  // 红通道累加
+    var g = 0L  // 绿通道累加
+    var b = 0L  // 蓝通道累加
+    // 累加全部像素
+    for (y in 0 until DARK_AVG_SAMPLE_SIZE) {
+        for (x in 0 until DARK_AVG_SAMPLE_SIZE) {
+            val c = small.getPixel(x, y)  // 读取像素
+            r += Color.red(c)  // 累加红
+            g += Color.green(c)  // 累加绿
+            b += Color.blue(c)  // 累加蓝
+        }
+    }
+    // 回收临时小图
+    if (small !== source) small.recycle()
+
+    // 求均值并组装颜色
+    val n = (DARK_AVG_SAMPLE_SIZE * DARK_AVG_SAMPLE_SIZE).toLong()  // 像素总数
+    return Color.rgb((r / n).toInt(), (g / n).toInt(), (b / n).toInt())
+}
+
+/**
+ * 把颜色等比压暗到目标亮度，保留色相与饱和度倾向
+ * @param targetLuma 目标亮度 (0-255)
+ */
+private fun darkenToTargetLuma(color: Int, targetLuma: Int): Int {
+    // 当前亮度（Rec.601 加权）
+    val luma = 0.299 * Color.red(color) + 0.587 * Color.green(color) + 0.114 * Color.blue(color)
+    // 纯黑照片无法再暗化，直接返回深灰
+    if (luma < 1f) return Color.rgb(8, 8, 8)
+    // 缩放系数：把亮度压到目标值，上限 1 表示不提亮
+    val factor = (targetLuma / luma).coerceIn(0.02, 1.0)  // 缩放系数在 Double 域内夹紧
+    // 三通道等比缩放并限制在合法范围
+    return Color.rgb(
+        (Color.red(color) * factor).toInt().coerceIn(0, 255),  // 红通道
+        (Color.green(color) * factor).toInt().coerceIn(0, 255),  // 绿通道
+        (Color.blue(color) * factor).toInt().coerceIn(0, 255)  // 蓝通道
+    )
 }
 
 // ==================== 第1层：半透明背景 ====================
