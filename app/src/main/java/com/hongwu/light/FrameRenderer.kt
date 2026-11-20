@@ -14,7 +14,9 @@ import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import android.net.Uri
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.util.Log
 import kotlin.math.max
@@ -560,22 +562,46 @@ enum class ExportFormat(val label: String) {
 }
 
 /**
- * 将已渲染好的相框图片保存到系统相册
+ * 将已渲染好的相框图片保存到系统相册或用户自定义目录
  * 直接复用预览中的位图，避免二次合成（更快且保证与预览一致）
  * @param context Android Context
  * @param bitmap 已合成好的相框图片
  * @param format 导出格式规则（PNG/JPG），默认 JPG
+ * @param treeUri 自定义保存目录（SAF 树 Uri），为 null 时保存到系统相册
  * @return 是否保存成功
  */
 fun saveComposedImage(
     context: Context,
     bitmap: Bitmap,
-    format: ExportFormat = ExportFormat.JPG
+    format: ExportFormat = ExportFormat.JPG,
+    treeUri: Uri? = null
 ): Boolean {
     val timestamp = System.currentTimeMillis()  // 时间戳：用于文件名与 EXIF 时间
-    // 根据所选格式确定文件扩展名与 MIME 类型
+    // 根据所选格式确定文件扩展名、MIME 类型与压缩格式
     val ext = if (format == ExportFormat.PNG) "png" else "jpg"  // 文件扩展名
     val mime = if (format == ExportFormat.PNG) "image/png" else "image/jpeg"  // MIME 类型
+    val compressFormat = if (format == ExportFormat.PNG) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG  // 系统压缩格式
+
+    // 未设置自定义目录时走 MediaStore，保证图片一定进入系统相册
+    return if (treeUri == null) {
+        saveToGallery(context, bitmap, timestamp, ext, mime, compressFormat)
+    } else {
+        // 已设置自定义目录时写入用户授权的文件夹
+        saveToTreeDir(context, bitmap, treeUri, timestamp, ext, mime, compressFormat)
+    }
+}
+
+/**
+ * 保存到系统相册（MediaStore Pictures 目录，无需任何存储权限）
+ */
+private fun saveToGallery(
+    context: Context,
+    bitmap: Bitmap,
+    timestamp: Long,
+    ext: String,
+    mime: String,
+    compressFormat: Bitmap.CompressFormat
+): Boolean {
     val contentValues = ContentValues().apply {
         put(MediaStore.Images.Media.DISPLAY_NAME, "framed_$timestamp.$ext")  // 文件名（含格式后缀）
         put(MediaStore.Images.Media.MIME_TYPE, mime)  // MIME 类型
@@ -594,7 +620,6 @@ fun saveComposedImage(
 
     return try {
         // 打开输出流，按所选格式写入图片数据（PNG 无损、忽略质量参数；JPG 按 SAVE_QUALITY 压缩）
-        val compressFormat = if (format == ExportFormat.PNG) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG  // 系统压缩格式
         val os = resolver.openOutputStream(uri) ?: throw java.io.IOException("无法打开输出流")
         os.use { bitmap.compress(compressFormat, SAVE_QUALITY, it) }
 
@@ -607,6 +632,51 @@ fun saveComposedImage(
         Log.e(TAG, "保存图片失败", e)
         // 写入失败时删除记录，避免相册留下空/孤儿条目
         resolver.delete(uri, null, null)
+        false
+    }
+}
+
+/**
+ * 保存到用户通过 SAF 授权的自定义目录
+ * 依赖目录选择时拿到的持久化读写授权，授权被撤销或目录被删除时返回失败
+ */
+private fun saveToTreeDir(
+    context: Context,
+    bitmap: Bitmap,
+    treeUri: Uri,
+    timestamp: Long,
+    ext: String,
+    mime: String,
+    compressFormat: Bitmap.CompressFormat
+): Boolean {
+    val resolver = context.contentResolver  // 获取内容解析器
+    val fileName = "framed_$timestamp.$ext"  // 文件名（含格式后缀）
+
+    // 由树 Uri 还原出该目录的文档 Uri，作为创建文件的父节点
+    val treeDocId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
+    if (treeDocId == null) {
+        Log.e(TAG, "保存失败：自定义目录 Uri 不合法")
+        return false
+    }
+    val parentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocId)  // 父目录文档 Uri
+
+    // 在自定义目录内创建新文件，返回 null 表示目录不可写或授权已失效
+    val fileUri = try {
+        DocumentsContract.createDocument(resolver, parentUri, mime, fileName)
+    } catch (e: Exception) {
+        Log.e(TAG, "创建文件失败：自定义目录不可用或授权已失效", e)
+        null
+    } ?: return false
+
+    return try {
+        // 打开输出流写入图片数据
+        val os = resolver.openOutputStream(fileUri) ?: throw java.io.IOException("无法打开输出流")
+        os.use { bitmap.compress(compressFormat, SAVE_QUALITY, it) }
+        true
+    } catch (e: Exception) {
+        Log.e(TAG, "写入自定义目录失败", e)
+        // 写入失败时删除半成品文件，避免目录里留下 0 字节图片
+        runCatching { resolver.delete(fileUri, null, null) }
         false
     }
 }

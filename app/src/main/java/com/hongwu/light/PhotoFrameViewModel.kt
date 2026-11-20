@@ -27,6 +27,9 @@ private const val RECYCLE_DELAY_MS = 200L
 /** 风格预览条的一项：风格标识 + 对应的小尺寸成图 */
 data class StyleThumb(val style: FrameStyle, val bitmap: Bitmap)
 
+/** 应用内页面：不引入导航组件，用状态切换 */
+enum class AppScreen { FRAME, SETTINGS }
+
 /** 相框界面 UI 状态 */
 data class FrameUiState(
     val originalBitmap: Bitmap? = null,       // 原始图片
@@ -36,6 +39,10 @@ data class FrameUiState(
     val watermarkLines: List<String> = emptyList(),  // 当前渲染使用的水印
     val customWatermark: String = "",         // 用户输入的水印
     val style: FrameStyle = FrameStyle.GRADIENT,      // 当前相框风格
+    val screen: AppScreen = AppScreen.FRAME,          // 当前显示的页面
+    val saveTreeUri: Uri? = null,             // 自定义保存目录，null 表示保存到系统相册
+    val saveDirLabel: String = "",            // 自定义目录的可读路径文本
+    val saveDirGranted: Boolean = true,       // 自定义目录的持久化授权是否仍有效
     val bgAlpha: Float = DEFAULT_BG_ALPHA.toFloat(),  // 背景透明度 (0-255)
     val mainScale: Float = DEFAULT_MAIN_SCALE,        // 主体图大小 (0.5-1.0)
     val rotation: Int = 0,                    // 图片旋转角度（90 的倍数）
@@ -58,6 +65,57 @@ class PhotoFrameViewModel(application: Application) : AndroidViewModel(applicati
     private var renderJob: Job? = null  // 渲染任务：新渲染启动前取消旧任务
     private var watermarkDebounceJob: Job? = null  // 水印输入防抖任务
     private var exifInfo: ShotInfo = ShotInfo()  // 缓存的 EXIF 信息，切换风格时无需重新读取
+
+    init {
+        // 启动时恢复上次选择的自定义保存目录
+        loadSaveLocation()
+    }
+
+    // 读取保存位置设置并刷新界面展示文本
+    private fun loadSaveLocation() {
+        val app = getApplication<Application>()
+        val uri = SaveLocationPrefs.loadTreeUri(app)  // 已保存的自定义目录
+        _uiState.update {
+            it.copy(
+                saveTreeUri = uri,  // 目录 Uri
+                saveDirLabel = uri?.let { u -> describeTreeUri(app, u) } ?: "",  // 可读路径
+                saveDirGranted = uri?.let { u -> SaveLocationPrefs.hasPermission(app, u) } ?: true  // 授权状态
+            )
+        }
+    }
+
+    /** 打开设置页 */
+    fun openSettings() {
+        loadSaveLocation()  // 进入前刷新，反映用户在系统里撤销授权等外部变化
+        _uiState.update { it.copy(screen = AppScreen.SETTINGS) }
+    }
+
+    /** 返回相框页 */
+    fun closeSettings() {
+        _uiState.update { it.copy(screen = AppScreen.FRAME) }
+    }
+
+    /** 用户选定自定义保存目录：申请持久化授权并写入偏好 */
+    fun onSaveDirPicked(uri: Uri) {
+        val app = getApplication<Application>()
+        SaveLocationPrefs.takePermission(app, uri)  // 申请重启后仍可写的持久化授权
+        SaveLocationPrefs.saveTreeUri(app, uri)  // 保存目录设置
+        _uiState.update {
+            it.copy(
+                saveTreeUri = uri,  // 新目录
+                saveDirLabel = describeTreeUri(app, uri),  // 可读路径
+                saveDirGranted = SaveLocationPrefs.hasPermission(app, uri)  // 授权结果
+            )
+        }
+    }
+
+    /** 清除自定义目录设置，恢复为保存到系统相册 */
+    fun onResetSaveDir() {
+        val app = getApplication<Application>()
+        _uiState.value.saveTreeUri?.let { SaveLocationPrefs.releasePermission(app, it) }  // 释放持久化授权
+        SaveLocationPrefs.saveTreeUri(app, null)  // 清空偏好
+        _uiState.update { it.copy(saveTreeUri = null, saveDirLabel = "", saveDirGranted = true) }
+    }
 
     /** 选中图片后：加载图片、读取 EXIF、合成相框 */
     fun onImagePicked(uri: Uri) {
@@ -133,18 +191,24 @@ class PhotoFrameViewModel(application: Application) : AndroidViewModel(applicati
         _uiState.update { it.copy(exportFormat = format) }
     }
 
-    /** 保存当前预览的相框图到相册 */
+    /** 保存当前预览的相框图到相册或自定义目录 */
     fun save() {
         val frame = _uiState.value.frameBitmap ?: return
         val format = _uiState.value.exportFormat  // 用户所选的导出格式
+        val treeUri = _uiState.value.saveTreeUri  // 自定义目录，为 null 时保存到系统相册
         val app = getApplication<Application>()
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
-            val success = withContext(Dispatchers.IO) { saveComposedImage(app, frame, format) }
+            val success = withContext(Dispatchers.IO) { saveComposedImage(app, frame, format, treeUri) }
             _uiState.update {
                 it.copy(
                     isLoading = false,
-                    messageResId = if (success) R.string.save_success else R.string.save_failed,
+                    // 失败提示区分场景：自定义目录失败需引导用户重新选择
+                    messageResId = when {
+                        success -> R.string.save_success
+                        treeUri != null -> R.string.save_failed_custom
+                        else -> R.string.save_failed
+                    },
                     messageArgs = if (success) arrayOf(format.label) else emptyArray()  // 成功时提示携带格式名
                 )
             }
