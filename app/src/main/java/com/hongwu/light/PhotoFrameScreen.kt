@@ -8,6 +8,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -38,6 +43,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -165,6 +171,76 @@ fun PhotoFrameApp(viewModel: PhotoFrameViewModel = viewModel()) {
                 }
             }
 
+            // 风格预览条：横向滑动对比各风格的小尺寸成图，点击切换当前风格
+            if (uiState.styleThumbs.isNotEmpty()) {
+                // 缩略图行的横向滚动状态
+                val styleScroll = rememberScrollState()
+                Text(
+                    text = stringResource(R.string.label_frame_style),
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(start = 16.dp, top = 4.dp)
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(styleScroll)
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    FrameStyle.entries.forEach { style ->
+                        val selected = uiState.style == style  // 是否为当前选中风格
+                        val thumb = uiState.styleThumbs.firstOrNull { it.style == style }  // 该风格的缩略图
+                        val cardShape = RoundedCornerShape(8.dp)  // 卡片圆角形状
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .width(112.dp)
+                                .clip(cardShape)
+                                .border(
+                                    width = if (selected) 2.dp else 1.dp,  // 选中项加粗描边
+                                    color = if (selected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.outlineVariant,
+                                    shape = cardShape
+                                )
+                                .clickable { viewModel.onStyleChanged(style) }  // 点击切换风格
+                        ) {
+                            if (thumb != null && !thumb.bitmap.isRecycled) {
+                                // 白底承载缩略图，避免白色展框缩略图与主题背景融为一体
+                                Image(
+                                    bitmap = thumb.bitmap.asImageBitmap(),
+                                    contentDescription = style.label,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(84.dp)
+                                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                                    contentScale = ContentScale.Fit
+                                )
+                            } else {
+                                // 缩略图未就绪时占位，避免预览条高度跳动
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(84.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                }
+                            }
+                            Text(
+                                text = style.label,
+                                fontSize = 12.sp,
+                                color = if (selected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
             // 控制面板：透明度滑块 + 水印输入
             if (uiState.originalBitmap != null) {
                 Column(
@@ -184,6 +260,7 @@ fun PhotoFrameApp(viewModel: PhotoFrameViewModel = viewModel()) {
                             onValueChange = viewModel::onBgAlphaChanged,
                             onValueChangeFinished = viewModel::onBgAlphaChangeFinished,
                             valueRange = 0f..255f,  // 范围 0-255
+                            enabled = uiState.style == FrameStyle.GRADIENT,  // 展框风格为纯白底，透明度不生效
                             modifier = Modifier.weight(1f)
                         )
                         Text("${uiState.bgAlpha.toInt()}", fontSize = 12.sp)

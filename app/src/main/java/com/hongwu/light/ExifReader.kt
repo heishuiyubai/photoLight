@@ -44,13 +44,27 @@ fun readExifInfo(context: Context, uri: Uri): ShotInfo {
     }
 }
 
-/** 生成水印文本列表（两行）：
- *  第1行：品牌型号
- *  第2行：拍摄参数
- *  若全部读不到，返回当前时间戳作为唯一一行
+/**
+ * 按相框风格生成水印文本行
+ * @param info 已读取的 EXIF 信息
+ * @param style 相框风格（渐变两行 / 展框三行）
+ * @param custom 用户输入的自定义水印
  */
-fun buildWatermarkLines(context: Context, uri: Uri): List<String> {
-    val info = readExifInfo(context, uri)
+fun buildWatermarkLines(info: ShotInfo, style: FrameStyle, custom: String = ""): List<String> = when (style) {
+    FrameStyle.GRADIENT -> buildGradientLines(info, custom)  // 渐变风格水印
+    FrameStyle.WHITE_MOUNT -> buildMountLines(info, custom)  // 展框风格水印
+}
+
+/** 品牌标语表：仅收录已确认无误的品牌，未命中则不显示标语行 */
+private val BRAND_TAGLINES = mapOf(
+    "HASSELBLAD" to "CREATE TO INSPIRE"
+)
+
+/** 渐变风格水印：第1行品牌型号，第2行拍摄参数；自定义水印整体替换 */
+private fun buildGradientLines(info: ShotInfo, custom: String): List<String> {
+    // 用户输入优先：非空时只显示用户输入的单行
+    val customLine = custom.trim().takeIf { it.isNotEmpty() }
+    if (customLine != null) return listOf(customLine)
 
     // 第1行：品牌型号
     val line1 = listOfNotNull(info.brand, info.model)
@@ -66,13 +80,44 @@ fun buildWatermarkLines(context: Context, uri: Uri): List<String> {
         line1 != null && line2 != null -> listOf(line1, line2)
         line2 != null -> listOf(line2)
         line1 != null -> listOf(line1, line2 ?: "")
-        else -> {
-            // fallback: 当前时间戳
-            val ts = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-            listOf(ts)
-        }
+        else -> listOf(currentTimestampLine())  // fallback: 当前时间戳
     }
 }
+
+/** 展框风格水印：品牌行 + 标语行（可缺）+ 参数行 */
+private fun buildMountLines(info: ShotInfo, custom: String): List<String> {
+    // 参数行：焦距 光圈 快门 ISO，用单空格分隔以贴合展框排版
+    val params = listOfNotNull(info.focalLength, info.aperture, info.shutter, info.iso)
+        .joinToString(" ")
+        .takeIf { it.isNotEmpty() }
+
+    // 自定义水印优先作为品牌行，大写以对齐展框风格
+    val customBrand = custom.trim().takeIf { it.isNotEmpty() }?.uppercase(Locale.ROOT)
+
+    // EXIF 品牌名：Make 常带公司后缀（如 "NIKON CORPORATION"），只取首个单词
+    val exifBrand = info.brand?.trim()?.split(" ")?.firstOrNull()
+        ?.uppercase(Locale.ROOT)?.takeIf { it.isNotEmpty() }
+
+    // 品牌行取值优先级：自定义 > EXIF 品牌 > EXIF 型号 > 当前时间戳
+    val brand = customBrand
+        ?: exifBrand
+        ?: info.model?.trim()?.uppercase(Locale.ROOT)?.takeIf { it.isNotEmpty() }
+        ?: currentTimestampLine()
+
+    // 标语行只在 EXIF 品牌命中内置标语表时出现，自定义水印不臆造标语
+    val tagline = if (customBrand == null) exifBrand?.let { BRAND_TAGLINES[it] } else null
+
+    return when {
+        tagline != null && params != null -> listOf(brand, tagline, params)  // 三行完整版式
+        tagline != null -> listOf(brand, tagline)  // 品牌 + 标语
+        params != null -> listOf(brand, params)  // 品牌 + 参数
+        else -> listOf(brand)  // 仅品牌行
+    }
+}
+
+/** 无任何 EXIF 信息时使用的兜底文本行 */
+private fun currentTimestampLine(): String =
+    SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
 
 // -------- 格式化工具函数 --------
 

@@ -17,6 +17,7 @@ import android.graphics.Typeface
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
+import kotlin.math.max
 import kotlin.math.min
 
 // ==================== 常量配置区 ====================
@@ -45,7 +46,104 @@ private const val WATERMARK_AREA_RATIO = 0.15f
 /** 主体图边缘羽化比例：边缘向内淡出的宽度占短边的比例 */
 private const val EDGE_FEATHER_RATIO = 0.07f
 
+// ==================== 白色展框风格常量 ====================
+
+/** 展框左右留白占照片短边的比例（参考官方展框实测值） */
+private const val MOUNT_SIDE_RATIO = 0.104f
+
+/** 展框顶部留白占照片短边的比例 */
+private const val MOUNT_TOP_RATIO = 0.052f
+
+/** 展框底部文字带占照片短边的比例 */
+private const val MOUNT_BOTTOM_RATIO = 0.213f
+
+/** 展框留白系数基准：mainScale 等于默认值时留白系数为 1 */
+private const val MOUNT_PAD_BASE = 1f - DEFAULT_MAIN_SCALE
+
+/** 展框留白系数下限：滑块拖到 1.0 时仍保留边框，避免文字无处安放 */
+private const val MOUNT_PAD_MIN = 0.35f
+
+/** 展框留白系数上限：避免边框过厚并控制阴影离屏位图的内存占用 */
+private const val MOUNT_PAD_MAX = 2f
+
+/** 展框投影模糊半径占照片短边的比例 */
+private const val MOUNT_SHADOW_BLUR_RATIO = 0.05f
+
+/** 展框投影透明度 (0-255)：白底上的投影需比暗底柔和 */
+private const val MOUNT_SHADOW_ALPHA = 60
+
+/** 展框投影 Y 轴偏移占照片短边的比例 */
+private const val MOUNT_SHADOW_OFFSET_RATIO = 0.006f
+
+/** 展框品牌行字号占文字带高度的比例 */
+private const val MOUNT_TEXT1_SIZE_RATIO = 0.22f
+
+/** 展框标语行字号占文字带高度的比例 */
+private const val MOUNT_TEXT2_SIZE_RATIO = 0.135f
+
+/** 展框参数行字号占文字带高度的比例 */
+private const val MOUNT_TEXT3_SIZE_RATIO = 0.145f
+
+/** 展框三行版式中各行中心在文字带内的位置比例 */
+private const val MOUNT_LINE1_POS = 0.32f
+
+/** 展框标语行垂直位置比例 */
+private const val MOUNT_LINE2_POS = 0.52f
+
+/** 展框参数行垂直位置比例 */
+private const val MOUNT_LINE3_POS = 0.76f
+
+/** 展框两行版式中品牌行的垂直位置比例 */
+private const val MOUNT_TWO_LINE1_POS = 0.35f
+
+/** 展框两行版式中参数行的垂直位置比例 */
+private const val MOUNT_TWO_LINE2_POS = 0.68f
+
+/** 展框品牌行字距（em）：展框风格要求宽字距 */
+private const val MOUNT_TEXT1_SPACING = 0.30f
+
+/** 展框标语行字距（em） */
+private const val MOUNT_TEXT2_SPACING = 0.45f
+
+/** 展框参数行字距（em） */
+private const val MOUNT_TEXT3_SPACING = 0.05f
+
+/** 缩略图最长边像素：风格预览条使用的小图尺寸 */
+private const val THUMB_MAX_SIDE = 480
+
+// ==================== 相框风格 ====================
+
+/** 相框风格：不同风格的画布构造方式与绘制层完全不同 */
+enum class FrameStyle(val label: String) {
+    GRADIENT("渐变"),      // 原图半透明铺底 + 圆角羽化 + 投影（项目原有风格）
+    WHITE_MOUNT("白框")    // 白色扩画布 + 硬边照片 + 底部三行黑色文字（展框风格）
+}
+
 // ==================== 主函数 ====================
+
+/**
+ * 按指定风格生成相框图片
+ * @param source 原始图片 Bitmap
+ * @param watermarkLines 水印文字列表（内容随风格不同而不同）
+ * @param style 相框风格
+ * @param bgAlpha 背景透明度 (0-255)，仅渐变风格使用
+ * @param mainScale 主体图缩放比例 (0-1)，展框风格下决定留白厚度
+ * @param rotation 旋转角度（90 的倍数）
+ * @return 合成后的相框图片 Bitmap
+ */
+fun createFrame(
+    source: Bitmap,
+    watermarkLines: List<String>,
+    style: FrameStyle = FrameStyle.GRADIENT,
+    bgAlpha: Int = DEFAULT_BG_ALPHA,
+    mainScale: Float = DEFAULT_MAIN_SCALE,
+    rotation: Int = 0
+): Bitmap = when (style) {
+    // 渐变风格：画布尺寸等于原图尺寸
+    FrameStyle.GRADIENT -> createGradientFrame(source, watermarkLines, bgAlpha, mainScale, rotation)
+    // 展框风格：画布尺寸等于照片加边框，需向外扩展
+    FrameStyle.WHITE_MOUNT -> createWhiteMountFrame(source, watermarkLines, mainScale, rotation)
+}
 
 /**
  * 生成专业摄影相框图片
@@ -97,6 +195,168 @@ private fun rotateBitmap(source: Bitmap, degrees: Int): Bitmap {
     val matrix = Matrix()
     matrix.postRotate(degrees.toFloat())  // 设置旋转角度
     return Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
+}
+
+// ==================== 白色展框风格 ====================
+
+/**
+ * 生成白色展框风格相框
+ * 画布 = 照片 + 左右留白 + 顶部留白 + 底部文字带，照片按原始分辨率贴入不做缩放
+ * @param source 原始图片 Bitmap
+ * @param watermarkLines 水印文字（品牌 / 标语 / 参数）
+ * @param mainScale 留白控制参数，值越小留白越厚
+ * @param rotation 旋转角度（90 的倍数）
+ */
+private fun createWhiteMountFrame(source: Bitmap, watermarkLines: List<String>, mainScale: Float, rotation: Int): Bitmap {
+    // 若需要旋转，先得到旋转后的位图（90/270 会交换宽高）
+    val rotated = if (rotation % 360 == 0) source else rotateBitmap(source, rotation)
+
+    // 照片尺寸（展框不对照片做缩放，直接沿用旋转后的宽高）
+    val photoW = rotated.width.toFloat()  // 照片宽度
+    val photoH = rotated.height.toFloat()  // 照片高度
+
+    // 以照片短边为留白基准，保证横图与竖图的边框厚度观感一致
+    val shortSide = min(photoW, photoH)  // 照片短边长度
+
+    // 留白系数：mainScale 每偏离默认值一档，边框等比变厚或变薄
+    val padScale = ((1f - mainScale) / MOUNT_PAD_BASE).coerceIn(MOUNT_PAD_MIN, MOUNT_PAD_MAX)  // 留白缩放系数
+
+    // 各方向留白（像素）
+    val sidePad = shortSide * MOUNT_SIDE_RATIO * padScale  // 左右留白
+    val topPad = shortSide * MOUNT_TOP_RATIO * padScale  // 顶部留白
+    val bandH = shortSide * MOUNT_BOTTOM_RATIO * padScale  // 底部文字带高度
+
+    // 画布尺寸 = 照片尺寸 + 留白（因此输出宽高比与原图不同）
+    val W = (photoW + sidePad * 2f).toInt()  // 画布宽度
+    val H = (photoH + topPad + bandH).toInt()  // 画布高度
+
+    // 创建画布 Bitmap 并铺纯白底色
+    val result = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(result)
+    canvas.drawColor(Color.WHITE)
+
+    // 照片在画布中的矩形区域（水平居中，上方留白薄、下方留白厚）
+    val rect = RectF(sidePad, topPad, sidePad + photoW, topPad + photoH)
+
+    // 先绘制照片下方的柔和投影，模糊半径与偏移量随照片尺寸等比缩放
+    drawDropShadow(
+        canvas,  // 主画布
+        rect,  // 照片矩形
+        0f,  // 展框为直角，圆角半径 0
+        blur = (shortSide * MOUNT_SHADOW_BLUR_RATIO * padScale).coerceIn(8f, 64f),  // 模糊半径，限制上限以控制阴影离屏位图大小
+        alpha = MOUNT_SHADOW_ALPHA,  // 投影透明度
+        offsetY = shortSide * MOUNT_SHADOW_OFFSET_RATIO * padScale  // 投影下移量
+    )
+
+    // 按原始分辨率绘制照片（不做缩放，保留全部细节，边缘为硬边）
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    canvas.drawBitmap(rotated, sidePad, topPad, paint)
+
+    // 在底部文字带内绘制三行黑色文字
+    drawMountWatermark(canvas, W, topPad + photoH, bandH, watermarkLines)
+
+    // 回收临时旋转图（若不是原图）
+    if (rotated !== source) rotated.recycle()
+
+    return result
+}
+
+/**
+ * 绘制展框底部文字带：品牌行（衬线斜体宽字距）、标语行、参数行
+ * @param bandTop 文字带顶部 Y 坐标
+ * @param bandH 文字带高度
+ */
+private fun drawMountWatermark(canvas: Canvas, W: Int, bandTop: Float, bandH: Float, lines: List<String>) {
+    // 无文字或文字带过窄时不绘制
+    if (lines.isEmpty() || bandH <= 0f) return
+
+    // 创建文字画笔，展框文字统一为纯黑、居中对齐
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = Paint.Align.CENTER  // 文字居中对齐
+        color = Color.BLACK  // 黑色文字
+    }
+
+    // 画布水平中心 X 坐标
+    val centerX = W / 2f
+
+    // 按行数选择版式：三行为完整版式，两行时省略标语行并重新分布位置
+    val sizeRatios: FloatArray  // 各行字号占带高的比例
+    val posRatios: FloatArray  // 各行中心占带高的位置比例
+    when (lines.size) {
+        1 -> {  // 仅一行：垂直居中显示
+            sizeRatios = floatArrayOf(MOUNT_TEXT1_SIZE_RATIO)
+            posRatios = floatArrayOf(0.5f)
+        }
+        2 -> {  // 两行：品牌 + 参数
+            sizeRatios = floatArrayOf(MOUNT_TEXT1_SIZE_RATIO, MOUNT_TEXT3_SIZE_RATIO)
+            posRatios = floatArrayOf(MOUNT_TWO_LINE1_POS, MOUNT_TWO_LINE2_POS)
+        }
+        else -> {  // 三行：品牌 + 标语 + 参数
+            sizeRatios = floatArrayOf(MOUNT_TEXT1_SIZE_RATIO, MOUNT_TEXT2_SIZE_RATIO, MOUNT_TEXT3_SIZE_RATIO)
+            posRatios = floatArrayOf(MOUNT_LINE1_POS, MOUNT_LINE2_POS, MOUNT_LINE3_POS)
+        }
+    }
+
+    // 逐行绘制
+    for (i in lines.indices) {
+        // 首行为品牌行，末行（行数大于 1 时）为参数行，其余为标语行
+        val isBrand = i == 0  // 是否品牌行
+        val isParams = i == lines.size - 1 && lines.size > 1  // 是否参数行
+
+        // 品牌行使用衬线斜体还原展框质感，标语与参数行跟随系统默认字体
+        paint.typeface = if (isBrand) {
+            Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC)  // 衬线粗斜体
+        } else {
+            Typeface.DEFAULT  // 系统默认字体
+        }
+
+        // 字距：标语行最宽，品牌行次之，参数行接近常规
+        paint.letterSpacing = when {
+            isBrand -> MOUNT_TEXT1_SPACING  // 品牌行字距
+            isParams -> MOUNT_TEXT3_SPACING  // 参数行字距
+            else -> MOUNT_TEXT2_SPACING  // 标语行字距
+        }
+
+        // 字号按文字带高度等比计算
+        paint.textSize = bandH * sizeRatios[i]
+
+        // 用字体度量把行的视觉中心对齐到目标位置，保证不同字号下仍居中
+        val fm = paint.fontMetrics  // 字体度量
+        val baseline = bandTop + bandH * posRatios[i] - (fm.ascent + fm.descent) / 2f  // 基线 Y 坐标
+        canvas.drawText(lines[i], centerX, baseline, paint)  // 绘制该行文字
+    }
+}
+
+/**
+ * 生成指定风格的小尺寸相框图，用于界面风格预览条
+ * 先等比缩小原图再走同一套渲染逻辑，保证缩略图与成图版式一致
+ * @param maxSide 缩略图最长边像素
+ */
+fun createStyleThumb(source: Bitmap, style: FrameStyle, watermarkLines: List<String>, bgAlpha: Int, mainScale: Float, rotation: Int, maxSide: Int = THUMB_MAX_SIDE): Bitmap {
+    // 先按旋转后的尺寸计算缩放比例（90/270 会交换宽高）
+    val swap = rotation % 180 != 0  // 是否交换宽高
+    val rotatedW = if (swap) source.height else source.width  // 旋转后宽
+    val rotatedH = if (swap) source.width else source.height  // 旋转后高
+
+    // 计算等比缩放系数，长边不超过 maxSide
+    val scale = maxSide.toFloat() / max(rotatedW, rotatedH)  // 缩放系数
+
+    // 缩放系数不小于 1 时不缩小，直接复用原图
+    val small = if (scale >= 1f) {
+        source  // 图本身已足够小，直接使用
+    } else {
+        // 用 Matrix 等比缩小到位图（新对象，需在使用后回收）
+        val matrix = Matrix().apply { setScale(scale, scale) }  // 缩放矩阵
+        Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)  // 生成缩小图
+    }
+
+    // 走正式渲染流程生成小图
+    val thumb = createFrame(small, watermarkLines, style, bgAlpha, mainScale, rotation)
+
+    // 回收临时缩放图
+    if (small !== source) small.recycle()
+
+    return thumb
 }
 
 // ==================== 第1层：半透明背景 ====================
@@ -186,10 +446,20 @@ private fun drawMainImage(canvas: Canvas, source: Bitmap, W: Int, H: Int, mainSc
 /**
  * 绘制柔和投影阴影
  * 使用离屏 Bitmap + BlurMaskFilter 实现高斯模糊阴影
+ * @param blur 模糊半径（像素）
+ * @param alpha 阴影透明度 (0-255)
+ * @param offsetY 阴影 Y 轴偏移量（像素）
  */
-private fun drawDropShadow(canvas: Canvas, rect: RectF, cornerRadius: Float) {
-    // 阴影 Bitmap 需要比主体图大，留出模糊扩散空间
-    val padding = 80  // 阴影扩散边距（像素）
+private fun drawDropShadow(
+    canvas: Canvas,
+    rect: RectF,
+    cornerRadius: Float,
+    blur: Float = SHADOW_BLUR_RADIUS,
+    alpha: Int = SHADOW_ALPHA,
+    offsetY: Float = SHADOW_OFFSET_Y
+) {
+    // 阴影 Bitmap 需要比主体图大，留出模糊扩散空间（按模糊半径的 3 倍估算，另加原默认余量）
+    val padding = (blur * 3f).toInt() + 8  // 阴影扩散边距（像素）
     val shadowW = rect.width().toInt() + padding * 2  // 阴影 Bitmap 宽度
     val shadowH = rect.height().toInt() + padding * 2  // 阴影 Bitmap 高度
 
@@ -199,8 +469,8 @@ private fun drawDropShadow(canvas: Canvas, rect: RectF, cornerRadius: Float) {
 
     // 创建阴影画笔，设置模糊效果
     val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(SHADOW_ALPHA, 0, 0, 0)  // 半透明黑色
-        maskFilter = BlurMaskFilter(SHADOW_BLUR_RADIUS, BlurMaskFilter.Blur.NORMAL)  // 高斯模糊
+        color = Color.argb(alpha, 0, 0, 0)  // 半透明黑色
+        maskFilter = BlurMaskFilter(blur, BlurMaskFilter.Blur.NORMAL)  // 高斯模糊
     }
 
     // 在离屏画布中心绘制圆角矩形（作为阴影形状）
@@ -217,7 +487,7 @@ private fun drawDropShadow(canvas: Canvas, rect: RectF, cornerRadius: Float) {
     canvas.save()  // 保存画布状态
     canvas.translate(
         rect.left - padding,  // X 轴对齐到主体图左边
-        rect.top - padding + SHADOW_OFFSET_Y  // Y 轴对齐并向下偏移
+        rect.top - padding + offsetY  // Y 轴对齐并向下偏移
     )
     canvas.drawBitmap(shadowBmp, 0f, 0f, drawPaint)  // 绘制阴影 Bitmap
     canvas.restore()  // 恢复画布状态
