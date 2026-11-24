@@ -73,11 +73,21 @@ private val BRAND_TAGLINES = mapOf(
     "HASSELBLAD" to "CREATE TO INSPIRE"
 )
 
-/** 渐变风格水印：第1行品牌型号，第2行拍摄参数；自定义水印整体替换 */
+/** 渐变风格水印：第1行品牌型号，第2行拍摄参数；自定义水印作为标题行，与时间/文案同开时继续向下排列 */
 private fun buildGradientLines(info: ShotInfo, custom: String, showShotTime: Boolean, dayCaption: String?): List<String> {
-    // 用户输入优先：非空时只显示用户输入的单行
+    // 用户输入优先：作为标题行展示
     val customLine = custom.trim().takeIf { it.isNotEmpty() }
-    if (customLine != null) return listOf(customLine)
+    if (customLine != null) {
+        // 日期文案（启用且能算出天数时才有值）
+        val caption = dayCaption?.trim()?.takeIf { it.isNotEmpty() }
+        // 拍摄时间行（开启展示且有拍摄时间时才有值）
+        val time = formatShotTime(info.dateTime).takeIf { showShotTime }
+        return when {
+            caption != null -> listOfNotNull(customLine, caption, time)  // 标题 + 日期文案 + 时间
+            time != null -> listOf(customLine, time)  // 标题 + 拍摄时间
+            else -> listOf(customLine)  // 仅自定义水印时保持单行
+        }
+    }
 
     // 第1行：品牌型号
     val line1 = listOfNotNull(info.brand, info.model)
@@ -86,10 +96,12 @@ private fun buildGradientLines(info: ShotInfo, custom: String, showShotTime: Boo
 
     // 第2行：日期文案 / 拍摄时间 / 拍摄参数，按优先级取第一项
     val line2 = buildParamsLine(info, showShotTime, "  ·  ", dayCaption)
+    // 第3行：日期文案与拍摄时间同时开启时，时间单独成行
+    val line3 = extraShotTimeLine(info, showShotTime, dayCaption)
 
     return when {
-        line1 != null && line2 != null -> listOf(line1, line2)
-        line2 != null -> listOf(line2)
+        line1 != null && line2 != null -> listOfNotNull(line1, line2, line3)
+        line2 != null -> listOfNotNull(line2, line3)
         line1 != null -> listOf(line1, line2 ?: "")
         else -> listOf(currentTimestampLine())  // fallback: 当前时间戳
     }
@@ -116,10 +128,13 @@ private fun buildMountLines(info: ShotInfo, custom: String, showShotTime: Boolea
     // 标语行只在 EXIF 品牌命中内置标语表时出现，自定义水印不臆造标语
     val tagline = if (customBrand == null) exifBrand?.let { BRAND_TAGLINES[it] } else null
 
+    // 日期文案与拍摄时间同时开启时，时间单独成行排在文案下方
+    val timeLine = extraShotTimeLine(info, showShotTime, dayCaption)
+
     return when {
-        tagline != null && params != null -> listOf(brand, tagline, params)  // 三行完整版式
+        tagline != null && params != null -> listOfNotNull(brand, tagline, params, timeLine)  // 三/四行完整版式
         tagline != null -> listOf(brand, tagline)  // 品牌 + 标语
-        params != null -> listOf(brand, params)  // 品牌 + 参数
+        params != null -> listOfNotNull(brand, params, timeLine)  // 品牌 + 参数（可追加时间行）
         else -> listOf(brand)  // 仅品牌行
     }
 }
@@ -146,7 +161,14 @@ private fun buildDarkPlateLines(info: ShotInfo, custom: String, showShotTime: Bo
     if (brand.isEmpty() && model.isEmpty() && params.isEmpty()) {
         return listOf(currentTimestampLine(), "", "")
     }
-    return listOf(brand, model, params)
+    // 日期文案与拍摄时间同时开启时，时间单独成行排在参数行下方
+    val timeLine = extraShotTimeLine(info, showShotTime, dayCaption)
+    return buildList {
+        add(brand)  // 第1段：品牌
+        add(model)  // 第2段：型号
+        add(params)  // 第3段：参数 / 日期文案
+        timeLine?.let { add(it) }  // 第4段：拍摄时间（可选）
+    }
 }
 
 /** EXIF 拍摄时间的标准格式 */
@@ -167,6 +189,16 @@ private fun buildParamsLine(info: ShotInfo, showShotTime: Boolean, separator: St
     return listOfNotNull(info.focalLength, info.aperture, info.shutter, info.iso)
         .takeIf { it.isNotEmpty() }
         ?.joinToString(separator)
+}
+
+/**
+ * 日期文案与拍摄时间同时开启时的额外时间行：时间排在文案下方单独成行
+ * 未开启时间展示、未启用日期文案或无拍摄时间时返回 null
+ */
+private fun extraShotTimeLine(info: ShotInfo, showShotTime: Boolean, dayCaption: String?): String? {
+    if (!showShotTime) return null  // 未开启时间展示不需要额外行
+    if (dayCaption?.trim().isNullOrEmpty()) return null  // 无日期文案时时间已占用参数行
+    return formatShotTime(info.dateTime)  // 生成时间文本
 }
 
 /** 拍摄时间格式化：EXIF 原始格式 "yyyy:MM:dd HH:mm:ss" 转为 "yyyy-MM-dd HH:mm"，解析失败时原样返回 */

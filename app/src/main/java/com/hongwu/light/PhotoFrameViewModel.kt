@@ -50,6 +50,8 @@ data class FrameUiState(
     val captionItalic: Boolean = false,       // 日期文案是否斜体
     val captionBold: Boolean = false,         // 日期文案是否加粗
     val captionSizeScale: Float = 1f,         // 日期文案字号倍数（0.5-1.5）
+    val unifyStyleEnabled: Boolean = false,   // 是否统一各水印行的字体格式、字间距与透明度
+    val unifyStyles: Set<FrameStyle> = FrameStyle.entries.toSet(),  // 统一风格生效的相框风格
     val bgAlpha: Float = DEFAULT_BG_ALPHA.toFloat(),  // 背景透明度 (0-255)
     val mainScale: Float = DEFAULT_MAIN_SCALE,        // 主体图大小 (0.5-1.0)
     val rotation: Int = 0,                    // 图片旋转角度（90 的倍数）
@@ -86,7 +88,11 @@ class PhotoFrameViewModel(application: Application) : AndroidViewModel(applicati
                 dayCountText = WatermarkPrefs.loadDayCountText(app),  // 文案模板
                 captionItalic = WatermarkPrefs.loadCaptionItalic(app),  // 文案斜体
                 captionBold = WatermarkPrefs.loadCaptionBold(app),  // 文案加粗
-                captionSizeScale = WatermarkPrefs.loadCaptionSize(app)  // 文案字号倍数
+                captionSizeScale = WatermarkPrefs.loadCaptionSize(app),  // 文案字号倍数
+                unifyStyleEnabled = WatermarkPrefs.loadUnifyEnabled(app),  // 统一风格开关
+                unifyStyles = WatermarkPrefs.loadUnifyStyles(app)  // 生效风格集合（名称转枚举）
+                    .mapNotNull { name -> FrameStyle.entries.firstOrNull { it.name == name } }
+                    .toSet()
             )
         }
     }
@@ -166,7 +172,7 @@ class PhotoFrameViewModel(application: Application) : AndroidViewModel(applicati
             _uiState.update { it.copy(originalBitmap = bmp, imageUri = uri) }
 
             // 合成相框并显示（同时生成各风格缩略图）
-            composeAndShow(bmp, resolveWatermark(_uiState.value.style), resolveCaption())
+            composeAndShow(bmp, resolveWatermark(_uiState.value.style), resolveCaption(), isUnified(_uiState.value.style))
             _uiState.update { it.copy(isLoading = false) }
         }
     }
@@ -273,6 +279,24 @@ class PhotoFrameViewModel(application: Application) : AndroidViewModel(applicati
         reRenderFrame()  // 字号变化，重新渲染
     }
 
+    /** 切换"统一水印文字风格"：开启后各水印行使用相同字体格式、字间距与透明度 */
+    fun onUnifyStyleEnabledChanged(enabled: Boolean) {
+        if (_uiState.value.unifyStyleEnabled == enabled) return  // 状态未变化不处理
+        WatermarkPrefs.saveUnifyEnabled(getApplication(), enabled)  // 持久化开关
+        _uiState.update { it.copy(unifyStyleEnabled = enabled) }  // 更新状态
+        reRenderFrame()  // 水印风格变化，重新渲染
+    }
+
+    /** 勾选/取消某种相框风格是否应用统一水印风格 */
+    fun onUnifyStyleToggled(style: FrameStyle, selected: Boolean) {
+        val current = _uiState.value.unifyStyles  // 当前生效风格集合
+        val next = if (selected) current + style else current - style  // 勾选为加入，取消为移除
+        if (next == current) return  // 集合未变化不处理
+        WatermarkPrefs.saveUnifyStyles(getApplication(), next.map { it.name }.toSet())  // 持久化名称集合
+        _uiState.update { it.copy(unifyStyles = next) }  // 更新状态
+        reRenderFrame()  // 当前风格的统一状态可能变化，重新渲染
+    }
+
     /** 保存当前预览的相框图到相册或自定义目录 */
     fun save() {
         val frame = _uiState.value.frameBitmap ?: return
@@ -307,9 +331,13 @@ class PhotoFrameViewModel(application: Application) : AndroidViewModel(applicati
         val b = _uiState.value.originalBitmap ?: return
         renderJob?.cancel()  // 取消进行中的渲染，保证只有最新一次渲染的结果生效
         renderJob = viewModelScope.launch {
-            composeAndShow(b, resolveWatermark(_uiState.value.style), resolveCaption())
+            composeAndShow(b, resolveWatermark(_uiState.value.style), resolveCaption(), isUnified(_uiState.value.style))
         }
     }
+
+    // 指定风格是否启用统一水印风格：开关打开且该风格被勾选时生效
+    private fun isUnified(style: FrameStyle): Boolean =
+        _uiState.value.unifyStyleEnabled && style in _uiState.value.unifyStyles
 
     // 确定指定风格实际生效的水印文本（自定义水印、时间开关与日期文案优先规则在各风格内部处理）
     private fun resolveWatermark(style: FrameStyle): List<String> =
@@ -341,10 +369,10 @@ class PhotoFrameViewModel(application: Application) : AndroidViewModel(applicati
 
     // 合成相框并更新预览
     // 注意：这里不设置 isLoading，保持旧图继续显示，等新图渲染完无缝替换，避免闪烁
-    private suspend fun composeAndShow(b: Bitmap, wmLines: List<String>, caption: CaptionLine?) {
+    private suspend fun composeAndShow(b: Bitmap, wmLines: List<String>, caption: CaptionLine?, unifyWatermark: Boolean) {
         val state = _uiState.value
         val composed = withContext(Dispatchers.IO) {
-            createFrame(b, wmLines, state.style, state.bgAlpha.toInt(), state.mainScale, state.rotation, caption)
+            createFrame(b, wmLines, state.style, state.bgAlpha.toInt(), state.mainScale, state.rotation, caption, unifyWatermark)
         }
         // 已被更新的渲染任务取消时，丢弃本次结果，避免旧结果覆盖新结果
         if (!coroutineContext.isActive) {
@@ -380,7 +408,8 @@ class PhotoFrameViewModel(application: Application) : AndroidViewModel(applicati
                         state.bgAlpha.toInt(),
                         state.mainScale,
                         state.rotation,
-                        caption  // 日期文案字体格式
+                        caption,  // 日期文案字体格式
+                        isUnified(style)  // 该风格是否启用统一水印风格
                     )
                 )
             }

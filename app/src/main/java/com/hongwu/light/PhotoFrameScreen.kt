@@ -200,6 +200,10 @@ fun PhotoFrameApp(viewModel: PhotoFrameViewModel = viewModel()) {
                     onCaptionBoldChanged = viewModel::onCaptionBoldChanged,
                     onCaptionSizeChanged = viewModel::onCaptionSizeChanged,
                     onCaptionSizeChangeFinished = viewModel::onCaptionSizeChangeFinished,
+                    unifyStyleEnabled = uiState.unifyStyleEnabled,
+                    unifyStyles = uiState.unifyStyles,
+                    onUnifyStyleEnabledChanged = viewModel::onUnifyStyleEnabledChanged,
+                    onUnifyStyleToggled = viewModel::onUnifyStyleToggled,
                     onPickDir = { dirPickerLauncher.launch(null) },  // 不预设起始目录
                     onReset = viewModel::onResetSaveDir,
                     modifier = Modifier.fillMaxSize()
@@ -438,6 +442,10 @@ private fun SettingsContent(
     onCaptionBoldChanged: (Boolean) -> Unit,
     onCaptionSizeChanged: (Float) -> Unit,
     onCaptionSizeChangeFinished: () -> Unit,
+    unifyStyleEnabled: Boolean,
+    unifyStyles: Set<FrameStyle>,
+    onUnifyStyleEnabledChanged: (Boolean) -> Unit,
+    onUnifyStyleToggled: (FrameStyle, Boolean) -> Unit,
     onPickDir: () -> Unit,
     onReset: () -> Unit,
     modifier: Modifier = Modifier
@@ -587,6 +595,59 @@ private fun SettingsContent(
                 modifier = Modifier.weight(1f)
             )
             Text("${(captionSizeScale * 100).toInt()}%", fontSize = 12.sp)
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        HorizontalDivider()  // 日期文案与统一风格之间的分隔线
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // 统一水印文字风格：开启后各水印行使用相同的字体格式、字间距与透明度
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            // 左侧标题与说明
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.settings_unify_style),
+                    fontSize = 16.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.settings_unify_style_hint),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            // 右侧开关
+            Switch(
+                checked = unifyStyleEnabled,
+                onCheckedChange = onUnifyStyleEnabledChanged
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // 生效的相框风格：可多选，未勾选的风格保持原有主次排版
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = stringResource(R.string.label_unify_apply),
+                fontSize = 14.sp
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            FrameStyle.entries.forEach { style ->
+                val selected = style in unifyStyles  // 该风格是否已勾选
+                FilterChip(
+                    selected = selected,
+                    onClick = { onUnifyStyleToggled(style, !selected) },  // 切换该风格
+                    label = { Text(style.label, fontSize = 13.sp) },
+                    enabled = unifyStyleEnabled,
+                    modifier = Modifier.padding(end = 8.dp)
+                )
+            }
         }
 
         // 日期选择弹窗

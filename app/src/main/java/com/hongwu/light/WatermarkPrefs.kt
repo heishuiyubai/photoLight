@@ -29,6 +29,12 @@ object WatermarkPrefs {
     /** 日期文案字号倍数的键（默认 1.0） */
     private const val KEY_CAPTION_SIZE = "caption_size_scale"
 
+    /** 是否统一水印文字风格的键，默认关闭 */
+    private const val KEY_UNIFY_ENABLED = "unify_style_enabled"
+
+    /** 统一风格生效的相框风格集合键（存风格名，未写入时默认全部风格） */
+    private const val KEY_UNIFY_STYLES = "unify_styles"
+
     /** 读取"展示拍摄时间"开关，默认关闭以保持原有参数水印 */
     fun loadShowShotTime(context: Context): Boolean =
         prefs(context).getBoolean(KEY_SHOW_SHOT_TIME, false)
@@ -103,6 +109,30 @@ object WatermarkPrefs {
     fun saveCaptionSize(context: Context, scale: Float) {
         prefs(context).edit()
             .putFloat(KEY_CAPTION_SIZE, scale)
+            .apply()
+    }
+
+    /** 读取"统一水印文字风格"开关，默认关闭 */
+    fun loadUnifyEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_UNIFY_ENABLED, false)
+
+    /** 写入"统一水印文字风格"开关 */
+    fun saveUnifyEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit()
+            .putBoolean(KEY_UNIFY_ENABLED, enabled)
+            .apply()
+    }
+
+    /** 读取统一风格生效的相框风格名集合，未写入时默认全部风格 */
+    fun loadUnifyStyles(context: Context): Set<String> =
+        prefs(context).getStringSet(KEY_UNIFY_STYLES, FrameStyle.entries.map { it.name }.toSet())
+            ?.toSet()  // 拷贝一份，避免外部修改内部集合
+            ?: FrameStyle.entries.map { it.name }.toSet()
+
+    /** 写入统一风格生效的相框风格名集合 */
+    fun saveUnifyStyles(context: Context, styles: Set<String>) {
+        prefs(context).edit()
+            .putStringSet(KEY_UNIFY_STYLES, styles)
             .apply()
     }
 

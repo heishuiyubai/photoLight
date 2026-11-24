@@ -86,20 +86,29 @@ private const val MOUNT_TEXT2_SIZE_RATIO = 0.135f
 /** 展框参数行字号占文字带高度的比例 */
 private const val MOUNT_TEXT3_SIZE_RATIO = 0.145f
 
-/** 展框三行版式中各行中心在文字带内的位置比例 */
-private const val MOUNT_LINE1_POS = 0.32f
+/** 展框三行版式中标题行的中心位置比例 */
+private const val MOUNT_LINE1_POS = 0.26f
 
-/** 展框标语行垂直位置比例 */
-private const val MOUNT_LINE2_POS = 0.52f
+/** 展框三行版式中内容行的垂直位置比例 */
+private const val MOUNT_LINE2_POS = 0.56f
 
-/** 展框参数行垂直位置比例 */
-private const val MOUNT_LINE3_POS = 0.76f
+/** 展框三行版式中末行的垂直位置比例 */
+private const val MOUNT_LINE3_POS = 0.81f
+
+/** 展框拍摄时间行字号占文字带高度的比例：比日期文案更小，形成层级 */
+private const val MOUNT_TIME_SIZE_RATIO = 0.12f
 
 /** 展框两行版式中品牌行的垂直位置比例 */
 private const val MOUNT_TWO_LINE1_POS = 0.35f
 
 /** 展框两行版式中参数行的垂直位置比例 */
 private const val MOUNT_TWO_LINE2_POS = 0.68f
+
+/** 展框四行版式（品牌 + 标语 + 日期文案 + 拍摄时间）各行字号占文字带高度的比例 */
+private val MOUNT_FOUR_SIZE_RATIOS = floatArrayOf(0.20f, 0.12f, 0.14f, 0.115f)
+
+/** 展框四行版式各行中心在文字带内的位置比例 */
+private val MOUNT_FOUR_POS_RATIOS = floatArrayOf(0.18f, 0.42f, 0.64f, 0.85f)
 
 /** 展框品牌行字距（em）：展框风格要求宽字距 */
 private const val MOUNT_TEXT1_SPACING = 0.30f
@@ -148,6 +157,18 @@ private const val DARK_LINE1_POS = 0.34f
 /** 底板参数行中心在文字带内的位置比例 */
 private const val DARK_LINE2_POS = 0.55f
 
+/** 底板拍摄时间行字号占文字带高度的比例（日期文案与时间同时开启时） */
+private const val DARK_TEXT3_SIZE_RATIO = 0.12f
+
+/** 底板三行版式（品牌 + 日期文案 + 时间）品牌行中心位置比例 */
+private const val DARK_LINE1_POS_3 = 0.27f
+
+/** 底板三行版式参数行中心位置比例 */
+private const val DARK_LINE2_POS_3 = 0.52f
+
+/** 底板三行版式时间行中心位置比例 */
+private const val DARK_LINE3_POS_3 = 0.77f
+
 /** 底板品牌行文字颜色：浅灰白，保证在深底上可读 */
 private val DARK_TEXT_BRAND_COLOR = Color.rgb(232, 228, 226)
 
@@ -186,6 +207,10 @@ private fun styledTypeface(base: Typeface, style: CaptionStyle): Typeface {
     return if (flags == 0) base else Typeface.create(base, flags)  // 无格式直接复用基础字体
 }
 
+/** 统一风格时所有水印行共用的字体：存在文案时套用其斜体/加粗设置，否则使用系统默认字体 */
+private fun unifiedTypeface(caption: CaptionLine?): Typeface =
+    styledTypeface(Typeface.DEFAULT, caption?.style ?: CaptionStyle())  // 无文案时即系统默认字体
+
 // ==================== 主函数 ====================
 
 /**
@@ -197,6 +222,7 @@ private fun styledTypeface(base: Typeface, style: CaptionStyle): Typeface {
  * @param mainScale 主体图缩放比例 (0-1)，展框风格下决定留白厚度
  * @param rotation 旋转角度（90 的倍数）
  * @param caption 需要特殊字体格式的文案行，null 表示全部使用风格默认格式
+ * @param unifyWatermark 是否统一各水印行的字体格式、字间距与透明度（字号保持各行原有比例）
  * @return 合成后的相框图片 Bitmap
  */
 fun createFrame(
@@ -206,14 +232,15 @@ fun createFrame(
     bgAlpha: Int = DEFAULT_BG_ALPHA,
     mainScale: Float = DEFAULT_MAIN_SCALE,
     rotation: Int = 0,
-    caption: CaptionLine? = null
+    caption: CaptionLine? = null,
+    unifyWatermark: Boolean = false
 ): Bitmap = when (style) {
     // 渐变风格：画布尺寸等于原图尺寸
-    FrameStyle.GRADIENT -> createGradientFrame(source, watermarkLines, bgAlpha, mainScale, rotation, caption)
+    FrameStyle.GRADIENT -> createGradientFrame(source, watermarkLines, bgAlpha, mainScale, rotation, caption, unifyWatermark)
     // 展框风格：画布尺寸等于照片加边框，需向外扩展
-    FrameStyle.WHITE_MOUNT -> createWhiteMountFrame(source, watermarkLines, mainScale, rotation, caption)
+    FrameStyle.WHITE_MOUNT -> createWhiteMountFrame(source, watermarkLines, mainScale, rotation, caption, unifyWatermark)
     // 暗色底板风格：画布尺寸等于原图尺寸，背景改为照片主色派生的深色
-    FrameStyle.DARK_PLATE -> createDarkPlateFrame(source, watermarkLines, mainScale, rotation, caption)
+    FrameStyle.DARK_PLATE -> createDarkPlateFrame(source, watermarkLines, mainScale, rotation, caption, unifyWatermark)
 }
 
 /**
@@ -224,9 +251,10 @@ fun createFrame(
  * @param mainScale 主体图缩放比例 (0-1)，默认 0.85
  * @param rotation 旋转角度（90 的倍数），默认 0
  * @param caption 需要特殊字体格式的文案行，null 表示使用默认格式
+ * @param unifyWatermark 是否统一各水印行的字体格式、字间距与透明度
  * @return 合成后的相框图片 Bitmap
  */
-fun createGradientFrame(source: Bitmap, watermarkLines: List<String>, bgAlpha: Int = DEFAULT_BG_ALPHA, mainScale: Float = DEFAULT_MAIN_SCALE, rotation: Int = 0, caption: CaptionLine? = null): Bitmap {
+fun createGradientFrame(source: Bitmap, watermarkLines: List<String>, bgAlpha: Int = DEFAULT_BG_ALPHA, mainScale: Float = DEFAULT_MAIN_SCALE, rotation: Int = 0, caption: CaptionLine? = null, unifyWatermark: Boolean = false): Bitmap {
     // 若需要旋转，先得到旋转后的位图（90/270 会交换宽高）
     val rotated = if (rotation % 360 == 0) source else rotateBitmap(source, rotation)
 
@@ -249,7 +277,7 @@ fun createGradientFrame(source: Bitmap, watermarkLines: List<String>, bgAlpha: I
 //
 //    // ---------- 第3层：绘制水印文字 ----------
 //    // 在底部区域显示 EXIF 拍摄参数
-    drawWatermarkText(canvas, W, H, watermarkLines, mainScale, caption)
+    drawWatermarkText(canvas, W, H, watermarkLines, mainScale, caption, unifyWatermark)
 
     // 回收临时旋转图（若不是原图）
     if (rotated !== source) rotated.recycle()
@@ -279,8 +307,9 @@ private fun rotateBitmap(source: Bitmap, degrees: Int): Bitmap {
  * @param mainScale 留白控制参数，值越小留白越厚
  * @param rotation 旋转角度（90 的倍数）
  * @param caption 需要特殊字体格式的文案行
+ * @param unifyWatermark 是否统一各水印行的字体格式与字间距
  */
-private fun createWhiteMountFrame(source: Bitmap, watermarkLines: List<String>, mainScale: Float, rotation: Int, caption: CaptionLine?): Bitmap {
+private fun createWhiteMountFrame(source: Bitmap, watermarkLines: List<String>, mainScale: Float, rotation: Int, caption: CaptionLine?, unifyWatermark: Boolean): Bitmap {
     // 若需要旋转，先得到旋转后的位图（90/270 会交换宽高）
     val rotated = if (rotation % 360 == 0) source else rotateBitmap(source, rotation)
 
@@ -326,7 +355,7 @@ private fun createWhiteMountFrame(source: Bitmap, watermarkLines: List<String>, 
     canvas.drawBitmap(rotated, sidePad, topPad, paint)
 
     // 在底部文字带内绘制三行黑色文字
-    drawMountWatermark(canvas, W, topPad + photoH, bandH, watermarkLines, caption)
+    drawMountWatermark(canvas, W, topPad + photoH, bandH, watermarkLines, caption, unifyWatermark)
 
     // 回收临时旋转图（若不是原图）
     if (rotated !== source) rotated.recycle()
@@ -335,13 +364,17 @@ private fun createWhiteMountFrame(source: Bitmap, watermarkLines: List<String>, 
 }
 
 /**
- * 绘制展框底部文字带：品牌行（衬线斜体宽字距）、标语行、参数行
+ * 绘制展框底部文字带：品牌行（衬线斜体宽字距）、标语行、参数行；日期文案与时间同时开启时最多四行
  * @param bandTop 文字带顶部 Y 坐标
  * @param bandH 文字带高度
+ * @param unifyWatermark 是否统一各行的字体格式与字间距
  */
-private fun drawMountWatermark(canvas: Canvas, W: Int, bandTop: Float, bandH: Float, lines: List<String>, caption: CaptionLine?) {
+private fun drawMountWatermark(canvas: Canvas, W: Int, bandTop: Float, bandH: Float, lines: List<String>, caption: CaptionLine?, unifyWatermark: Boolean) {
     // 无文字或文字带过窄时不绘制
     if (lines.isEmpty() || bandH <= 0f) return
+
+    // 统一风格时的共用字体（存在文案则套用其斜体/加粗）
+    val unified = unifiedTypeface(caption)
 
     // 创建文字画笔，展框文字统一为纯黑、居中对齐
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -352,54 +385,65 @@ private fun drawMountWatermark(canvas: Canvas, W: Int, bandTop: Float, bandH: Fl
     // 画布水平中心 X 坐标
     val centerX = W / 2f
 
-    // 按行数选择版式：三行为完整版式，两行时省略标语行并重新分布位置
-    val sizeRatios: FloatArray  // 各行字号占带高的比例
-    val posRatios: FloatArray  // 各行中心占带高的位置比例
-    when (lines.size) {
-        1 -> {  // 仅一行：垂直居中显示
-            sizeRatios = floatArrayOf(MOUNT_TEXT1_SIZE_RATIO)
-            posRatios = floatArrayOf(0.5f)
-        }
-        2 -> {  // 两行：品牌 + 参数
-            sizeRatios = floatArrayOf(MOUNT_TEXT1_SIZE_RATIO, MOUNT_TEXT3_SIZE_RATIO)
-            posRatios = floatArrayOf(MOUNT_TWO_LINE1_POS, MOUNT_TWO_LINE2_POS)
-        }
-        else -> {  // 三行：品牌 + 标语 + 参数
-            sizeRatios = floatArrayOf(MOUNT_TEXT1_SIZE_RATIO, MOUNT_TEXT2_SIZE_RATIO, MOUNT_TEXT3_SIZE_RATIO)
-            posRatios = floatArrayOf(MOUNT_LINE1_POS, MOUNT_LINE2_POS, MOUNT_LINE3_POS)
-        }
-    }
+    // 末行是否拍摄时间行：日期文案位于倒数第二行时，末行为额外的时间行
+    val lastIndex = lines.lastIndex  // 末行下标
+    val captionIndex = caption?.let { c -> lines.indexOfLast { it == c.text } } ?: -1  // 日期文案所在下标
+    val timeIndex = if (lines.size >= 3 && captionIndex == lastIndex - 1) lastIndex else -1  // 拍摄时间行下标
 
     // 逐行绘制
     for (i in lines.indices) {
-        // 首行为品牌行，末行（行数大于 1 时）为参数行，其余为标语行
-        val isBrand = i == 0  // 是否品牌行
-        val isParams = i == lines.size - 1 && lines.size > 1  // 是否参数行
+        // 首行为品牌/标题行
+        val isBrand = i == 0  // 是否标题行
         // 日期文案行：文本与文案一致时改用用户设置的字体格式
         val captionStyle = caption?.takeIf { it.text == lines[i] }?.style
 
+        // 字号比例：标题最大，日期文案与参数行次之，拍摄时间最小，保证层级一致
+        val sizeRatio = when {
+            lines.size >= 4 -> MOUNT_FOUR_SIZE_RATIOS[i]  // 四行版式使用紧凑比例
+            isBrand -> MOUNT_TEXT1_SIZE_RATIO  // 标题行
+            i == timeIndex -> MOUNT_TIME_SIZE_RATIO  // 拍摄时间行
+            i == captionIndex || i == lastIndex -> MOUNT_TEXT3_SIZE_RATIO  // 日期文案/参数行
+            else -> MOUNT_TEXT2_SIZE_RATIO  // 标语行
+        }
+
+        // 行中心位置：三行版式按标题/内容/末行分布，四行版式使用紧凑比例
+        val posRatio = when {
+            lines.size == 1 -> 0.5f  // 单行垂直居中
+            lines.size == 2 -> if (i == 0) MOUNT_TWO_LINE1_POS else MOUNT_TWO_LINE2_POS  // 两行版式
+            lines.size == 3 -> when (i) {
+                0 -> MOUNT_LINE1_POS  // 标题行
+                1 -> MOUNT_LINE2_POS  // 内容行
+                else -> MOUNT_LINE3_POS  // 末行
+            }
+            else -> MOUNT_FOUR_POS_RATIOS[i]  // 四行版式
+        }
+
         // 品牌行使用衬线斜体还原展框质感，标语与参数行跟随系统默认字体；
-        // 日期文案行按用户设置叠加斜体/加粗
+        // 日期文案行按用户设置叠加斜体/加粗；开启统一风格后所有行使用同一字体
         paint.typeface = when {
+            unifyWatermark -> unified  // 统一风格：所有行共用字体
             captionStyle != null -> styledTypeface(Typeface.DEFAULT, captionStyle)  // 文案行自定义格式
             isBrand -> Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC)  // 衬线粗斜体
             else -> Typeface.DEFAULT  // 系统默认字体
         }
 
-        // 字距：标语行最宽，品牌行次之，参数行接近常规
+        // 字距：标语行最宽，标题行次之，内容、时间与参数行保持常规；统一风格时全部使用常规字距
         paint.letterSpacing = when {
-            isBrand -> MOUNT_TEXT1_SPACING  // 品牌行字距
-            isParams -> MOUNT_TEXT3_SPACING  // 参数行字距
+            unifyWatermark -> MOUNT_TEXT3_SPACING  // 统一风格：所有行常规字距
+            isBrand -> MOUNT_TEXT1_SPACING  // 标题行字距
+            i == timeIndex || i == captionIndex || i == lastIndex -> MOUNT_TEXT3_SPACING  // 时间/文案/参数行常规字距
             else -> MOUNT_TEXT2_SPACING  // 标语行字距
         }
 
         // 字号按文字带高度等比计算，文案行再乘以用户设置的字号倍数
-        paint.textSize = bandH * sizeRatios[i] * (captionStyle?.sizeScale ?: 1f)
+        paint.textSize = bandH * sizeRatio * (captionStyle?.sizeScale ?: 1f)
 
         // 用字体度量把行的视觉中心对齐到目标位置，保证不同字号下仍居中
         val fm = paint.fontMetrics  // 字体度量
-        val baseline = bandTop + bandH * posRatios[i] - (fm.ascent + fm.descent) / 2f  // 基线 Y 坐标
-        canvas.drawText(lines[i], centerX, baseline, paint)  // 绘制该行文字
+        val baseline = bandTop + bandH * posRatio - (fm.ascent + fm.descent) / 2f  // 基线 Y 坐标
+        // letterSpacing 会在末字符后再追加一份间距，居中绘制时向右补偿半个字距
+        val drawX = centerX + paint.letterSpacing * paint.textSize / 2f  // 该行绘制起点
+        canvas.drawText(lines[i], drawX, baseline, paint)  // 绘制该行文字
     }
 }
 
@@ -407,9 +451,10 @@ private fun drawMountWatermark(canvas: Canvas, W: Int, bandTop: Float, bandH: Fl
  * 生成指定风格的小尺寸相框图，用于界面风格预览条
  * 先等比缩小原图再走同一套渲染逻辑，保证缩略图与成图版式一致
  * @param caption 需要特殊字体格式的文案行
+ * @param unifyWatermark 是否统一各水印行的风格
  * @param maxSide 缩略图最长边像素
  */
-fun createStyleThumb(source: Bitmap, style: FrameStyle, watermarkLines: List<String>, bgAlpha: Int, mainScale: Float, rotation: Int, caption: CaptionLine? = null, maxSide: Int = THUMB_MAX_SIDE): Bitmap {
+fun createStyleThumb(source: Bitmap, style: FrameStyle, watermarkLines: List<String>, bgAlpha: Int, mainScale: Float, rotation: Int, caption: CaptionLine? = null, unifyWatermark: Boolean = false, maxSide: Int = THUMB_MAX_SIDE): Bitmap {
     // 先按旋转后的尺寸计算缩放比例（90/270 会交换宽高）
     val swap = rotation % 180 != 0  // 是否交换宽高
     val rotatedW = if (swap) source.height else source.width  // 旋转后宽
@@ -428,7 +473,7 @@ fun createStyleThumb(source: Bitmap, style: FrameStyle, watermarkLines: List<Str
     }
 
     // 走正式渲染流程生成小图
-    val thumb = createFrame(small, watermarkLines, style, bgAlpha, mainScale, rotation, caption)
+    val thumb = createFrame(small, watermarkLines, style, bgAlpha, mainScale, rotation, caption, unifyWatermark)
 
     // 回收临时缩放图
     if (small !== source) small.recycle()
@@ -447,8 +492,9 @@ fun createStyleThumb(source: Bitmap, style: FrameStyle, watermarkLines: List<Str
  * @param mainScale 留白控制参数，值越小留白越厚
  * @param rotation 旋转角度（90 的倍数）
  * @param caption 需要特殊字体格式的文案行
+ * @param unifyWatermark 是否统一两行文字的字体格式与颜色
  */
-private fun createDarkPlateFrame(source: Bitmap, watermarkLines: List<String>, mainScale: Float, rotation: Int, caption: CaptionLine?): Bitmap {
+private fun createDarkPlateFrame(source: Bitmap, watermarkLines: List<String>, mainScale: Float, rotation: Int, caption: CaptionLine?, unifyWatermark: Boolean): Bitmap {
     // 若需要旋转，先得到旋转后的位图（90/270 会交换宽高）
     val rotated = if (rotation % 360 == 0) source else rotateBitmap(source, rotation)
 
@@ -500,7 +546,7 @@ private fun createDarkPlateFrame(source: Bitmap, watermarkLines: List<String>, m
     drawRoundedImage(canvas, rotated, rect, cornerRadius)
 
     // 在照片下方的文字带内绘制两行浅色文字
-    drawPlateWatermark(canvas, W, H, topPad + photoH, watermarkLines, caption)
+    drawPlateWatermark(canvas, W, H, topPad + photoH, watermarkLines, caption, unifyWatermark)
 
     // 回收临时旋转图（若不是原图）
     if (rotated !== source) rotated.recycle()
@@ -530,32 +576,42 @@ private fun drawRoundedImage(canvas: Canvas, source: Bitmap, rect: RectF, corner
 /**
  * 绘制暗色底板文字：第1行品牌（衬线粗斜体）与型号（系统字体）混排并整体居中，第2行为拍摄参数
  * @param photoBottom 照片底边 Y 坐标，文字带为照片底边到画布底边之间的区域
+ * @param unifyWatermark 是否统一两行文字的字体格式与颜色
  */
-private fun drawPlateWatermark(canvas: Canvas, W: Int, H: Int, photoBottom: Float, lines: List<String>, caption: CaptionLine?) {
+private fun drawPlateWatermark(canvas: Canvas, W: Int, H: Int, photoBottom: Float, lines: List<String>, caption: CaptionLine?, unifyWatermark: Boolean) {
     // 文字带高度：照片底边到画布底边
     val bandH = H - photoBottom  // 文字带高度
     if (bandH <= 0f) return  // 照片铺满时没有地方放文字
 
-    // 三段文本：品牌、型号、参数
+    // 三段文本：品牌、型号、参数；第四段为日期文案与时间同开时的时间行
     val brand = lines.getOrElse(0) { "" }  // 品牌段
     val model = lines.getOrElse(1) { "" }  // 型号段
     val params = lines.getOrElse(2) { "" }  // 参数段
+    val timeText = lines.getOrElse(3) { "" }  // 单独成行的拍摄时间（可选）
     if (brand.isEmpty() && model.isEmpty() && params.isEmpty()) return  // 无内容直接返回
+
+    // 存在时间行时整体上移前两行，为第三行留出空间
+    val hasTime = timeText.isNotEmpty()  // 是否需要三行版式
+    val line1Pos = if (hasTime) DARK_LINE1_POS_3 else DARK_LINE1_POS  // 品牌行位置
+    val line2Pos = if (hasTime) DARK_LINE2_POS_3 else DARK_LINE2_POS  // 参数行位置
 
     // 画布水平中心
     val centerX = W / 2f
 
-    // 品牌画笔：衬线粗斜体，浅色保证可读
+    // 统一风格时的共用字体（存在文案则套用其斜体/加粗）
+    val unified = unifiedTypeface(caption)
+
+    // 品牌画笔：衬线粗斜体，浅色保证可读；统一风格时改为共用字体
     val brandPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textAlign = Paint.Align.LEFT  // 分段左对齐绘制，便于整行居中
-        typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC)  // 衬线粗斜体
+        typeface = if (unifyWatermark) unified else Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC)  // 统一风格或衬线粗斜体
         color = DARK_TEXT_BRAND_COLOR  // 浅灰白
         textSize = bandH * DARK_TEXT1_SIZE_RATIO  // 字号按带高计算
     }
-    // 型号画笔：跟随系统默认字体，与品牌同字号同基线
+    // 型号画笔：跟随系统默认字体，与品牌同字号同基线；统一风格时与品牌同字体
     val modelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textAlign = Paint.Align.LEFT  // 分段左对齐
-        typeface = Typeface.DEFAULT  // 系统默认字体
+        typeface = if (unifyWatermark) unified else Typeface.DEFAULT  // 统一风格或系统默认字体
         color = DARK_TEXT_BRAND_COLOR  // 与品牌同色
         textSize = brandPaint.textSize  // 同字号
     }
@@ -567,9 +623,9 @@ private fun drawPlateWatermark(canvas: Canvas, W: Int, H: Int, photoBottom: Floa
     val gap = if (model.isEmpty()) 0f else spaceWidth  // 两段之间的空格
     val totalWidth = brandWidth + gap + modelWidth  // 整行宽度
 
-    // 第1行基线：按字体度量把行的视觉中心对齐到文字带的 DARK_LINE1_POS 处
+    // 第1行基线：按字体度量把行的视觉中心对齐到品牌行位置处
     val fm = brandPaint.fontMetrics  // 字体度量
-    val baseline1 = photoBottom + bandH * DARK_LINE1_POS - (fm.ascent + fm.descent) / 2f  // 第1行基线
+    val baseline1 = photoBottom + bandH * line1Pos - (fm.ascent + fm.descent) / 2f  // 第1行基线
 
     // 从整行左端开始依次绘制两段
     var x = centerX - totalWidth / 2f  // 当前绘制起点
@@ -587,14 +643,31 @@ private fun drawPlateWatermark(canvas: Canvas, W: Int, H: Int, photoBottom: Floa
         val captionStyle = caption?.takeIf { it.text == params }?.style
         val paramsPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textAlign = Paint.Align.CENTER  // 整行居中
-            // 文案行用自定义格式，其余跟随系统默认字体
-            typeface = if (captionStyle != null) styledTypeface(Typeface.DEFAULT, captionStyle) else Typeface.DEFAULT
-            color = DARK_TEXT_PARAMS_COLOR  // 次级浅灰
+            // 文案行用自定义格式，其余跟随系统默认字体；统一风格时两行共用字体
+            typeface = when {
+                unifyWatermark -> unified  // 统一风格：所有行共用字体
+                captionStyle != null -> styledTypeface(Typeface.DEFAULT, captionStyle)  // 文案行自定义格式
+                else -> Typeface.DEFAULT  // 系统默认字体
+            }
+            color = if (unifyWatermark) DARK_TEXT_BRAND_COLOR else DARK_TEXT_PARAMS_COLOR  // 统一风格时与品牌行同色
             textSize = bandH * DARK_TEXT2_SIZE_RATIO * (captionStyle?.sizeScale ?: 1f)  // 字号按带高计算，文案行叠加用户倍数
         }
         val fm2 = paramsPaint.fontMetrics  // 参数行字体度量
-        val baseline2 = photoBottom + bandH * DARK_LINE2_POS - (fm2.ascent + fm2.descent) / 2f  // 第2行基线
+        val baseline2 = photoBottom + bandH * line2Pos - (fm2.ascent + fm2.descent) / 2f  // 第2行基线
         canvas.drawText(params, centerX, baseline2, paramsPaint)  // 绘制参数行
+    }
+
+    // 第3行：拍摄时间（日期文案与时间同时开启时），居中对齐
+    if (hasTime) {
+        val timePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textAlign = Paint.Align.CENTER  // 整行居中
+            typeface = if (unifyWatermark) unified else Typeface.DEFAULT  // 统一风格时共用字体
+            color = if (unifyWatermark) DARK_TEXT_BRAND_COLOR else DARK_TEXT_PARAMS_COLOR  // 统一风格时与品牌行同色
+            textSize = bandH * DARK_TEXT3_SIZE_RATIO  // 字号按带高计算
+        }
+        val fm3 = timePaint.fontMetrics  // 时间行字体度量
+        val baseline3 = photoBottom + bandH * DARK_LINE3_POS_3 - (fm3.ascent + fm3.descent) / 2f  // 第3行基线
+        canvas.drawText(timeText, centerX, baseline3, timePaint)  // 绘制时间行
     }
 }
 
@@ -783,10 +856,14 @@ private fun drawDropShadow(
 /**
  * 绘制水印文字
  * 在主体图底边与画布底边之间的边框区域内居中显示
+ * @param unifyWatermark 是否统一两行文字的字体格式与透明度
  */
-private fun drawWatermarkText(canvas: Canvas, W: Int, H: Int, lines: List<String>, mainScale: Float, caption: CaptionLine?) {
+private fun drawWatermarkText(canvas: Canvas, W: Int, H: Int, lines: List<String>, mainScale: Float, caption: CaptionLine?, unifyWatermark: Boolean) {
     // 如果没有水印文字，直接返回
     if (lines.isEmpty()) return
+
+    // 统一风格时的共用字体（存在文案则套用其斜体/加粗）
+    val unified = unifiedTypeface(caption)
 
     // 创建文字画笔
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -807,31 +884,42 @@ private fun drawWatermarkText(canvas: Canvas, W: Int, H: Int, lines: List<String
     if (lines.size == 1) {
         // 单行水印：在边框区域垂直居中；若该行是日期文案则应用自定义格式
         val captionStyle = caption?.takeIf { it.text == lines[0] }?.style
-        paint.typeface = if (captionStyle != null) styledTypeface(Typeface.DEFAULT, captionStyle) else Typeface.DEFAULT
+        paint.typeface = when {
+            unifyWatermark -> unified  // 统一风格：所有行共用字体
+            captionStyle != null -> styledTypeface(Typeface.DEFAULT, captionStyle)  // 文案行自定义格式
+            else -> Typeface.DEFAULT  // 系统默认字体
+        }
         paint.textSize = borderH * 0.3f * (captionStyle?.sizeScale ?: 1f)  // 字号：边框高度的 30%
         paint.color = Color.WHITE  // 白色文字
         paint.alpha = 200  // 稍微透明
         val textY = borderCenterY + paint.textSize * 0.3f  // 文字基线修正
         canvas.drawText(lines[0], centerX, textY, paint)  // 绘制文字
     } else {
-        // 双行水印：第1行品牌型号，第2行拍摄参数 / 日期文案
+        // 双行/三行水印：第1行标题，第2行参数/日期文案，第3行（可选）单独成行的拍摄时间
+        val threeRows = lines.size >= 3  // 是否三行版式
+        // 各行字号占边框高度的比例：三行时按标题 > 文案 > 时间的层级排列
+        val sizeRatios = if (threeRows) floatArrayOf(0.22f, 0.20f, 0.17f) else floatArrayOf(0.30f, 0.35f)
+        // 各行中心相对边框中心的偏移比例：三行等距分布并整体略向下，避免标题贴住照片底边
+        val posOffsets = if (threeRows) floatArrayOf(-0.28f, 0.04f, 0.36f) else floatArrayOf(-0.1f, 0.3f)
+        // 各行透明度：标题略淡，日期文案最实，时间为辅助信息略淡
+        val alphas = if (threeRows) intArrayOf(180, 240, 190) else intArrayOf(170, 240)
 
-        // 第1行：品牌型号（较小字号，半透明）
-        val line1Style = caption?.takeIf { it.text == lines[0] }?.style  // 首行文案格式
-        paint.typeface = if (line1Style != null) styledTypeface(Typeface.DEFAULT, line1Style) else Typeface.DEFAULT
-        paint.textSize = borderH * 0.30f * (line1Style?.sizeScale ?: 1f)  // 字号：边框高度的 30%
-        paint.color = Color.WHITE  // 白色
-        paint.alpha = 170  // 较透明（突出第2行）
-        val line1Y = borderCenterY - borderH * 0.1f  // 第1行在中心偏上
-        canvas.drawText(lines[0], centerX, line1Y, paint)  // 绘制品牌型号
-
-        // 第2行：拍摄参数 / 日期文案（较大字号，更实）
-        val line2Style = caption?.takeIf { it.text == lines[1] }?.style  // 第2行文案格式
-        paint.typeface = if (line2Style != null) styledTypeface(Typeface.DEFAULT, line2Style) else Typeface.DEFAULT
-        paint.textSize = borderH * 0.35f * (line2Style?.sizeScale ?: 1f)  // 字号：边框高度的 35%
-        paint.alpha = 240  // 接近不透明
-        val line2Y = borderCenterY + borderH * 0.3f  // 第2行在中心偏下
-        canvas.drawText(lines[1], centerX, line2Y, paint)  // 绘制拍摄参数
+        // 逐行绘制，日期文案行按用户设置应用字体格式
+        lines.forEachIndexed { index, line ->
+            val rowStyle = caption?.takeIf { it.text == line }?.style  // 该行是否为日期文案
+            paint.typeface = when {
+                unifyWatermark -> unified  // 统一风格：所有行共用字体
+                rowStyle != null -> styledTypeface(Typeface.DEFAULT, rowStyle)  // 文案行自定义格式
+                else -> Typeface.DEFAULT  // 系统默认字体
+            }
+            paint.textSize = borderH * sizeRatios[index] * (rowStyle?.sizeScale ?: 1f)  // 字号按边框高度计算
+            paint.color = Color.WHITE  // 白色文字
+            paint.alpha = if (unifyWatermark) 240 else alphas[index]  // 统一风格时所有行同透明度
+            // 用字体度量把行的视觉中心对齐到目标位置，避免不同字号下基线偏差
+            val fm = paint.fontMetrics  // 字体度量
+            val textY = borderCenterY + borderH * posOffsets[index] - (fm.ascent + fm.descent) / 2f  // 该行基线 Y 坐标
+            canvas.drawText(line, centerX, textY, paint)  // 绘制该行文字
+        }
     }
 }
 

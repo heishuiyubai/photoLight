@@ -36,6 +36,9 @@
     <string name="label_caption_size">字号</string>
     <string name="action_ok">确定</string>
     <string name="action_cancel">取消</string>
+    <string name="settings_unify_style">统一水印文字风格</string>
+    <string name="settings_unify_style_hint">开启后各水印行使用相同的字体格式、字间距与透明度，字号保持原有比例</string>
+    <string name="label_unify_apply">应用于</string>
     <string name="settings_save_location_title">保存位置</string>
     <string name="label_save_location">当前保存位置</string>
     <string name="save_location_default">系统相册（Pictures）</string>
