@@ -18,31 +18,42 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -56,6 +67,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -158,27 +171,47 @@ fun PhotoFrameApp(viewModel: PhotoFrameViewModel = viewModel()) {
             }
         }
     ) { innerPadding ->
-        // 设置页与相框页共用同一个 Scaffold，按当前页面切换内容
-        when (uiState.screen) {
-            AppScreen.SETTINGS -> SaveLocationSettings(
-                label = uiState.saveDirLabel,
-                treeUri = uiState.saveTreeUri,
-                granted = uiState.saveDirGranted,
-                onPickDir = { dirPickerLauncher.launch(null) },  // 不预设起始目录
-                onReset = viewModel::onResetSaveDir,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            )
-            AppScreen.FRAME -> FrameContent(
-                uiState = uiState,
-                animatedScale = animatedScale,
-                launchPicker = launchPicker,
-                viewModel = viewModel,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            )
+        // 键盘弹出时把内容整体顶到键盘上方：先消费系统栏内边距，再应用 IME 内边距，避免重复留白
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .consumeWindowInsets(innerPadding)
+                .imePadding()
+        ) {
+            // 设置页与相框页共用同一个 Scaffold，按当前页面切换内容
+            when (uiState.screen) {
+                AppScreen.SETTINGS -> SettingsContent(
+                    label = uiState.saveDirLabel,
+                    treeUri = uiState.saveTreeUri,
+                    granted = uiState.saveDirGranted,
+                    showShotTime = uiState.showShotTime,
+                    onShowShotTimeChanged = viewModel::onShowShotTimeChanged,
+                    dayCountEnabled = uiState.dayCountEnabled,
+                    dayCountStart = uiState.dayCountStart,
+                    dayCountText = uiState.dayCountText,
+                    onDayCountEnabledChanged = viewModel::onDayCountEnabledChanged,
+                    onDayCountStartChanged = viewModel::onDayCountStartChanged,
+                    onDayCountTextChanged = viewModel::onDayCountTextChanged,
+                    captionItalic = uiState.captionItalic,
+                    captionBold = uiState.captionBold,
+                    captionSizeScale = uiState.captionSizeScale,
+                    onCaptionItalicChanged = viewModel::onCaptionItalicChanged,
+                    onCaptionBoldChanged = viewModel::onCaptionBoldChanged,
+                    onCaptionSizeChanged = viewModel::onCaptionSizeChanged,
+                    onCaptionSizeChangeFinished = viewModel::onCaptionSizeChangeFinished,
+                    onPickDir = { dirPickerLauncher.launch(null) },  // 不预设起始目录
+                    onReset = viewModel::onResetSaveDir,
+                    modifier = Modifier.fillMaxSize()
+                )
+                AppScreen.FRAME -> FrameContent(
+                    uiState = uiState,
+                    animatedScale = animatedScale,
+                    launchPicker = launchPicker,
+                    viewModel = viewModel,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
         }
     }
 }
@@ -383,20 +416,208 @@ private fun FrameContent(
     }
 }
 
-/** 设置页：自定义保存位置 */
+/** 设置页：水印展示选项（拍摄时间 / 日期文案）+ 自定义保存位置 */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SaveLocationSettings(
+private fun SettingsContent(
     label: String,
     treeUri: Uri?,
     granted: Boolean,
+    showShotTime: Boolean,
+    onShowShotTimeChanged: (Boolean) -> Unit,
+    dayCountEnabled: Boolean,
+    dayCountStart: Long?,
+    dayCountText: String,
+    onDayCountEnabledChanged: (Boolean) -> Unit,
+    onDayCountStartChanged: (Long) -> Unit,
+    onDayCountTextChanged: (String) -> Unit,
+    captionItalic: Boolean,
+    captionBold: Boolean,
+    captionSizeScale: Float,
+    onCaptionItalicChanged: (Boolean) -> Unit,
+    onCaptionBoldChanged: (Boolean) -> Unit,
+    onCaptionSizeChanged: (Float) -> Unit,
+    onCaptionSizeChangeFinished: () -> Unit,
     onPickDir: () -> Unit,
     onReset: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // 日期选择弹窗开关
+    var showDatePicker by remember { mutableStateOf(false) }
+    // 起始日期展示文本：未设置时显示占位提示
+    val startDateLabel = dayCountStart
+        ?.let { LocalDate.ofEpochDay(it).format(DateTimeFormatter.ISO_LOCAL_DATE) }
+        ?: stringResource(R.string.day_count_start_unset)
+
     Column(
-        modifier = modifier.padding(16.dp)
+        modifier = modifier
+            .verticalScroll(rememberScrollState())  // 内容较多时允许滚动
+            .padding(16.dp)
     ) {
-        // 分区标题
+        // ===== 水印分区 =====
+        Text(
+            text = stringResource(R.string.settings_watermark_title),
+            style = MaterialTheme.typography.titleMedium
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // 展示拍摄时间开关：开启后用拍摄时间替换拍摄参数
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            // 左侧标题与说明
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.settings_show_shot_time),
+                    fontSize = 16.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.settings_show_shot_time_hint),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            // 右侧开关
+            Switch(
+                checked = showShotTime,
+                onCheckedChange = onShowShotTimeChanged
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        HorizontalDivider()  // 水印分区内部细分隔线
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // 日期文案开关：开启后用"拍摄时间 − 起始时间"的天数生成文案，并占用参数行
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            // 左侧标题与说明
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.settings_day_count),
+                    fontSize = 16.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.settings_day_count_hint),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            // 右侧开关
+            Switch(
+                checked = dayCountEnabled,
+                onCheckedChange = onDayCountEnabledChanged
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // 起始日期：点击打开系统日期选择器
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = stringResource(R.string.label_day_count_start),
+                fontSize = 14.sp,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(
+                onClick = { showDatePicker = true },
+                enabled = dayCountEnabled  // 未启用时不可选
+            ) {
+                Text(startDateLabel, fontSize = 15.sp)
+            }
+        }
+
+        // 文案模板输入：{0} 会被替换为天数
+        OutlinedTextField(
+            value = dayCountText,
+            onValueChange = onDayCountTextChanged,
+            label = { Text(stringResource(R.string.label_day_count_text)) },
+            supportingText = { Text(stringResource(R.string.settings_day_count_text_hint), fontSize = 12.sp) },
+            singleLine = true,
+            enabled = dayCountEnabled,  // 未启用时不可编辑
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        // 字体格式：斜体 / 加粗
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = stringResource(R.string.label_caption_style),
+                fontSize = 14.sp,
+                modifier = Modifier.weight(1f)
+            )
+            FilterChip(
+                selected = captionItalic,
+                onClick = { onCaptionItalicChanged(!captionItalic) },  // 切换斜体
+                label = { Text(stringResource(R.string.label_italic), fontSize = 13.sp) },
+                enabled = dayCountEnabled,
+                modifier = Modifier.padding(end = 8.dp)
+            )
+            FilterChip(
+                selected = captionBold,
+                onClick = { onCaptionBoldChanged(!captionBold) },  // 切换加粗
+                label = { Text(stringResource(R.string.label_bold), fontSize = 13.sp) },
+                enabled = dayCountEnabled
+            )
+        }
+
+        // 字号：相对风格默认字号的倍数
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(stringResource(R.string.label_caption_size), fontSize = 14.sp)
+            Spacer(modifier = Modifier.width(8.dp))
+            Slider(
+                value = captionSizeScale,
+                onValueChange = onCaptionSizeChanged,  // 拖动实时更新百分比
+                onValueChangeFinished = onCaptionSizeChangeFinished,  // 松手后重新渲染
+                valueRange = 0.5f..1.5f,  // 50% - 150%
+                enabled = dayCountEnabled,
+                modifier = Modifier.weight(1f)
+            )
+            Text("${(captionSizeScale * 100).toInt()}%", fontSize = 12.sp)
+        }
+
+        // 日期选择弹窗
+        if (showDatePicker) {
+            val pickerState = rememberDatePickerState(
+                initialSelectedDateMillis = dayCountStart?.times(86_400_000L)  // epochDay 转毫秒，未设置时为空
+            )
+            DatePickerDialog(
+                onDismissRequest = { showDatePicker = false },
+                confirmButton = {
+                    TextButton(onClick = {
+                        // 选中的毫秒为 UTC 零点，整除得到 epochDay
+                        pickerState.selectedDateMillis?.let { onDayCountStartChanged(it / 86_400_000L) }
+                        showDatePicker = false
+                    }) { Text(stringResource(R.string.action_ok)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDatePicker = false }) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                }
+            ) {
+                DatePicker(state = pickerState)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+        HorizontalDivider()  // 分区之间的分隔线
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // ===== 保存位置分区 =====
         Text(
             text = stringResource(R.string.settings_save_location_title),
             style = MaterialTheme.typography.titleMedium

@@ -21,6 +21,21 @@
     <string name="label_frame_style">相框风格</string>
     <!-- 设置页 -->
     <string name="title_settings">设置</string>
+    <string name="settings_watermark_title">水印</string>
+    <string name="settings_show_shot_time">展示拍摄时间</string>
+    <string name="settings_show_shot_time_hint">开启后在拍摄参数位置显示照片的拍摄时间，不再显示快门、光圈等参数；照片无拍摄时间时仍显示参数</string>
+    <string name="settings_day_count">日期文案</string>
+    <string name="settings_day_count_hint">按「拍摄时间 − 起始时间」的天数生成文案，开启后替换拍摄参数位</string>
+    <string name="label_day_count_start">起始时间</string>
+    <string name="day_count_start_unset">未设置</string>
+    <string name="label_day_count_text">文案模板</string>
+    <string name="settings_day_count_text_hint">用 {0} 表示天数，例如：小朋友出生{0}天；未包含 {0} 时天数追加在末尾</string>
+    <string name="label_caption_style">字体格式</string>
+    <string name="label_italic">斜体</string>
+    <string name="label_bold">加粗</string>
+    <string name="label_caption_size">字号</string>
+    <string name="action_ok">确定</string>
+    <string name="action_cancel">取消</string>
     <string name="settings_save_location_title">保存位置</string>
     <string name="label_save_location">当前保存位置</string>
     <string name="save_location_default">系统相册（Pictures）</string>

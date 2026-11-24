@@ -43,6 +43,13 @@ data class FrameUiState(
     val saveTreeUri: Uri? = null,             // 自定义保存目录，null 表示保存到系统相册
     val saveDirLabel: String = "",            // 自定义目录的可读路径文本
     val saveDirGranted: Boolean = true,       // 自定义目录的持久化授权是否仍有效
+    val showShotTime: Boolean = false,        // 是否在拍摄参数位置展示拍摄时间
+    val dayCountEnabled: Boolean = false,     // 是否启用日期文案（如"小朋友出生88天"）
+    val dayCountStart: Long? = null,          // 日期文案的起始日期（epochDay），null 表示未设置
+    val dayCountText: String = "",            // 日期文案模板，用 {0} 表示天数
+    val captionItalic: Boolean = false,       // 日期文案是否斜体
+    val captionBold: Boolean = false,         // 日期文案是否加粗
+    val captionSizeScale: Float = 1f,         // 日期文案字号倍数（0.5-1.5）
     val bgAlpha: Float = DEFAULT_BG_ALPHA.toFloat(),  // 背景透明度 (0-255)
     val mainScale: Float = DEFAULT_MAIN_SCALE,        // 主体图大小 (0.5-1.0)
     val rotation: Int = 0,                    // 图片旋转角度（90 的倍数）
@@ -63,12 +70,25 @@ class PhotoFrameViewModel(application: Application) : AndroidViewModel(applicati
     val uiState: StateFlow<FrameUiState> = _uiState.asStateFlow()
 
     private var renderJob: Job? = null  // 渲染任务：新渲染启动前取消旧任务
-    private var watermarkDebounceJob: Job? = null  // 水印输入防抖任务
+    private var inputDebounceJob: Job? = null  // 文本输入防抖任务（自定义水印 / 日期文案）
     private var exifInfo: ShotInfo = ShotInfo()  // 缓存的 EXIF 信息，切换风格时无需重新读取
 
     init {
         // 启动时恢复上次选择的自定义保存目录
         loadSaveLocation()
+        // 启动时恢复水印相关设置（拍摄时间开关、日期文案）
+        val app = getApplication<Application>()
+        _uiState.update {
+            it.copy(
+                showShotTime = WatermarkPrefs.loadShowShotTime(app),  // 拍摄时间开关
+                dayCountEnabled = WatermarkPrefs.loadDayCountEnabled(app),  // 日期文案开关
+                dayCountStart = WatermarkPrefs.loadDayCountStart(app),  // 起始日期
+                dayCountText = WatermarkPrefs.loadDayCountText(app),  // 文案模板
+                captionItalic = WatermarkPrefs.loadCaptionItalic(app),  // 文案斜体
+                captionBold = WatermarkPrefs.loadCaptionBold(app),  // 文案加粗
+                captionSizeScale = WatermarkPrefs.loadCaptionSize(app)  // 文案字号倍数
+            )
+        }
     }
 
     // 读取保存位置设置并刷新界面展示文本
@@ -125,7 +145,7 @@ class PhotoFrameViewModel(application: Application) : AndroidViewModel(applicati
 
             // 取消进行中的渲染/防抖任务并等待其结束，避免旧任务继续操作即将回收的位图
             renderJob?.cancelAndJoin()
-            watermarkDebounceJob?.cancel()
+            inputDebounceJob?.cancel()
 
             // 先解除旧位图引用，再延迟回收，避免其仍在当前帧被绘制时就被回收
             scheduleRecycle(_uiState.value.frameBitmap)
@@ -146,7 +166,7 @@ class PhotoFrameViewModel(application: Application) : AndroidViewModel(applicati
             _uiState.update { it.copy(originalBitmap = bmp, imageUri = uri) }
 
             // 合成相框并显示（同时生成各风格缩略图）
-            composeAndShow(bmp, resolveWatermark(_uiState.value.style))
+            composeAndShow(bmp, resolveWatermark(_uiState.value.style), resolveCaption())
             _uiState.update { it.copy(isLoading = false) }
         }
     }
@@ -172,8 +192,8 @@ class PhotoFrameViewModel(application: Application) : AndroidViewModel(applicati
     /** 水印输入：停止输入 500ms 后才重新渲染，避免每次击键都全量合成位图 */
     fun onWatermarkChanged(text: String) {
         _uiState.update { it.copy(customWatermark = text) }
-        watermarkDebounceJob?.cancel()
-        watermarkDebounceJob = viewModelScope.launch {
+        inputDebounceJob?.cancel()
+        inputDebounceJob = viewModelScope.launch {
             delay(WATERMARK_DEBOUNCE_MS)
             reRenderFrame()
         }
@@ -189,6 +209,68 @@ class PhotoFrameViewModel(application: Application) : AndroidViewModel(applicati
     /** 切换导出图片格式规则（PNG/JPG） */
     fun onExportFormatChanged(format: ExportFormat) {
         _uiState.update { it.copy(exportFormat = format) }
+    }
+
+    /** 切换"展示拍摄时间"：开启后用拍摄时间替换快门、光圈等参数，需重新合成水印 */
+    fun onShowShotTimeChanged(enabled: Boolean) {
+        if (_uiState.value.showShotTime == enabled) return  // 状态未变化不处理
+        WatermarkPrefs.saveShowShotTime(getApplication(), enabled)  // 持久化开关
+        _uiState.update { it.copy(showShotTime = enabled) }  // 更新状态
+        reRenderFrame()  // 水印内容变化，重新渲染
+    }
+
+    /** 切换"日期文案"：开启后用起始日期与拍摄时间的天数差替换参数行 */
+    fun onDayCountEnabledChanged(enabled: Boolean) {
+        if (_uiState.value.dayCountEnabled == enabled) return  // 状态未变化不处理
+        WatermarkPrefs.saveDayCountEnabled(getApplication(), enabled)  // 持久化开关
+        _uiState.update { it.copy(dayCountEnabled = enabled) }  // 更新状态
+        reRenderFrame()  // 水印内容变化，重新渲染
+    }
+
+    /** 设置日期文案的起始日期（epochDay），如宝宝出生日期 */
+    fun onDayCountStartChanged(epochDay: Long) {
+        if (_uiState.value.dayCountStart == epochDay) return  // 日期未变化不处理
+        WatermarkPrefs.saveDayCountStart(getApplication(), epochDay)  // 持久化起始日期
+        _uiState.update { it.copy(dayCountStart = epochDay) }  // 更新状态
+        reRenderFrame()  // 天数变化，重新渲染
+    }
+
+    /** 日期文案模板输入：立即持久化，停止输入 500ms 后再重新渲染 */
+    fun onDayCountTextChanged(text: String) {
+        WatermarkPrefs.saveDayCountText(getApplication(), text)  // 模板持久化
+        _uiState.update { it.copy(dayCountText = text) }
+        inputDebounceJob?.cancel()
+        inputDebounceJob = viewModelScope.launch {
+            delay(WATERMARK_DEBOUNCE_MS)
+            reRenderFrame()
+        }
+    }
+
+    /** 切换日期文案斜体 */
+    fun onCaptionItalicChanged(italic: Boolean) {
+        if (_uiState.value.captionItalic == italic) return  // 状态未变化不处理
+        WatermarkPrefs.saveCaptionItalic(getApplication(), italic)  // 持久化
+        _uiState.update { it.copy(captionItalic = italic) }  // 更新状态
+        reRenderFrame()  // 字体格式变化，重新渲染
+    }
+
+    /** 切换日期文案加粗 */
+    fun onCaptionBoldChanged(bold: Boolean) {
+        if (_uiState.value.captionBold == bold) return  // 状态未变化不处理
+        WatermarkPrefs.saveCaptionBold(getApplication(), bold)  // 持久化
+        _uiState.update { it.copy(captionBold = bold) }  // 更新状态
+        reRenderFrame()  // 字体格式变化，重新渲染
+    }
+
+    /** 日期文案字号拖动中：仅更新状态，松手后再渲染 */
+    fun onCaptionSizeChanged(scale: Float) {
+        _uiState.update { it.copy(captionSizeScale = scale) }
+    }
+
+    /** 日期文案字号拖动结束：持久化并重新渲染 */
+    fun onCaptionSizeChangeFinished() {
+        WatermarkPrefs.saveCaptionSize(getApplication(), _uiState.value.captionSizeScale)  // 持久化倍数
+        reRenderFrame()  // 字号变化，重新渲染
     }
 
     /** 保存当前预览的相框图到相册或自定义目录 */
@@ -225,20 +307,44 @@ class PhotoFrameViewModel(application: Application) : AndroidViewModel(applicati
         val b = _uiState.value.originalBitmap ?: return
         renderJob?.cancel()  // 取消进行中的渲染，保证只有最新一次渲染的结果生效
         renderJob = viewModelScope.launch {
-            composeAndShow(b, resolveWatermark(_uiState.value.style))
+            composeAndShow(b, resolveWatermark(_uiState.value.style), resolveCaption())
         }
     }
 
-    // 确定指定风格实际生效的水印文本（自定义水印优先规则在各风格内部处理）
+    // 确定指定风格实际生效的水印文本（自定义水印、时间开关与日期文案优先规则在各风格内部处理）
     private fun resolveWatermark(style: FrameStyle): List<String> =
-        buildWatermarkLines(exifInfo, style, _uiState.value.customWatermark)
+        buildWatermarkLines(
+            exifInfo,  // EXIF 信息
+            style,  // 风格
+            _uiState.value.customWatermark,  // 自定义水印
+            _uiState.value.showShotTime,  // 展示拍摄时间
+            resolveDayCaption()  // 日期文案（未启用时为 null）
+        )
+
+    // 计算当前生效的日期文案：开关关闭、未设置起始日期或照片无拍摄时间时返回 null
+    private fun resolveDayCaption(): String? {
+        val state = _uiState.value
+        if (!state.dayCountEnabled) return null  // 开关关闭不生成
+        val start = state.dayCountStart ?: return null  // 未设置起始日期不生成
+        return buildDayCountCaption(exifInfo, start, state.dayCountText)  // 天数模板替换
+    }
+
+    // 计算当前生效的日期文案及其字体格式，供渲染端按文本匹配应用样式
+    private fun resolveCaption(): CaptionLine? {
+        val text = resolveDayCaption() ?: return null
+        val state = _uiState.value
+        return CaptionLine(
+            text = text,
+            style = CaptionStyle(state.captionItalic, state.captionBold, state.captionSizeScale)
+        )
+    }
 
     // 合成相框并更新预览
     // 注意：这里不设置 isLoading，保持旧图继续显示，等新图渲染完无缝替换，避免闪烁
-    private suspend fun composeAndShow(b: Bitmap, wmLines: List<String>) {
+    private suspend fun composeAndShow(b: Bitmap, wmLines: List<String>, caption: CaptionLine?) {
         val state = _uiState.value
         val composed = withContext(Dispatchers.IO) {
-            createFrame(b, wmLines, state.style, state.bgAlpha.toInt(), state.mainScale, state.rotation)
+            createFrame(b, wmLines, state.style, state.bgAlpha.toInt(), state.mainScale, state.rotation, caption)
         }
         // 已被更新的渲染任务取消时，丢弃本次结果，避免旧结果覆盖新结果
         if (!coroutineContext.isActive) {
@@ -258,10 +364,13 @@ class PhotoFrameViewModel(application: Application) : AndroidViewModel(applicati
     // 生成各风格的小尺寸预览图：先缩小原图再走同一套渲染逻辑，成本很低
     private suspend fun renderStyleThumbs(b: Bitmap) {
         val state = _uiState.value
+        // 日期文案与风格无关，先算一次供所有缩略图复用（含字体格式）
+        val caption = resolveCaption()
+        val dayCaption = caption?.text
         val thumbs = withContext(Dispatchers.IO) {
             FrameStyle.entries.map { style ->
                 // 每种风格的水印文本不同，需各自拼装
-                val lines = buildWatermarkLines(exifInfo, style, state.customWatermark)
+                val lines = buildWatermarkLines(exifInfo, style, state.customWatermark, state.showShotTime, dayCaption)
                 StyleThumb(
                     style = style,  // 风格标识
                     bitmap = createStyleThumb(  // 小尺寸成图
@@ -270,7 +379,8 @@ class PhotoFrameViewModel(application: Application) : AndroidViewModel(applicati
                         lines,
                         state.bgAlpha.toInt(),
                         state.mainScale,
-                        state.rotation
+                        state.rotation,
+                        caption  // 日期文案字体格式
                     )
                 )
             }
