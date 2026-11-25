@@ -116,6 +116,13 @@ fun PhotoFrameApp(viewModel: PhotoFrameViewModel = viewModel()) {
         uri?.let { viewModel.onSaveDirPicked(it) }  // 选定自定义保存目录
     }
 
+    // 系统字体文件选择器：返回用户选定的字体 Uri
+    val fontPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let { viewModel.onFontPicked(it) }  // 选定字体后复制并启用
+    }
+
     // 设置页拦截系统返回键，返回相框页而不是直接退出应用
     BackHandler(enabled = uiState.screen == AppScreen.SETTINGS, onBack = viewModel::closeSettings)
 
@@ -188,22 +195,31 @@ fun PhotoFrameApp(viewModel: PhotoFrameViewModel = viewModel()) {
                     showShotTime = uiState.showShotTime,
                     onShowShotTimeChanged = viewModel::onShowShotTimeChanged,
                     dayCountEnabled = uiState.dayCountEnabled,
-                    dayCountStart = uiState.dayCountStart,
-                    dayCountText = uiState.dayCountText,
+                    captionPreview = uiState.captionPreview,
+                    captionPresets = uiState.captionPresets,
+                    captionPresetIndex = uiState.captionPresetIndex,
+                    onCaptionPresetSelected = viewModel::onCaptionPresetSelected,
+                    onCaptionPresetNameChanged = viewModel::onCaptionPresetNameChanged,
                     onDayCountEnabledChanged = viewModel::onDayCountEnabledChanged,
                     onDayCountStartChanged = viewModel::onDayCountStartChanged,
                     onDayCountTextChanged = viewModel::onDayCountTextChanged,
-                    captionItalic = uiState.captionItalic,
-                    captionBold = uiState.captionBold,
-                    captionSizeScale = uiState.captionSizeScale,
                     onCaptionItalicChanged = viewModel::onCaptionItalicChanged,
                     onCaptionBoldChanged = viewModel::onCaptionBoldChanged,
                     onCaptionSizeChanged = viewModel::onCaptionSizeChanged,
                     onCaptionSizeChangeFinished = viewModel::onCaptionSizeChangeFinished,
+                    onCaptionYmdChanged = viewModel::onCaptionYmdChanged,
                     unifyStyleEnabled = uiState.unifyStyleEnabled,
                     unifyStyles = uiState.unifyStyles,
                     onUnifyStyleEnabledChanged = viewModel::onUnifyStyleEnabledChanged,
                     onUnifyStyleToggled = viewModel::onUnifyStyleToggled,
+                    customFontName = uiState.customFontName,
+                    onPickFont = {
+                        // 打开系统文件选择器，允许选择 ttf/otf 字体
+                        fontPickerLauncher.launch(
+                            arrayOf("font/*", "application/x-font-ttf", "application/vnd.ms-opentype", "application/octet-stream")
+                        )
+                    },
+                    onResetFont = viewModel::onResetFont,
                     onPickDir = { dirPickerLauncher.launch(null) },  // 不预设起始目录
                     onReset = viewModel::onResetSaveDir,
                     modifier = Modifier.fillMaxSize()
@@ -430,30 +446,36 @@ private fun SettingsContent(
     showShotTime: Boolean,
     onShowShotTimeChanged: (Boolean) -> Unit,
     dayCountEnabled: Boolean,
-    dayCountStart: Long?,
-    dayCountText: String,
+    captionPreview: String?,
+    captionPresets: List<CaptionPreset>,
+    captionPresetIndex: Int,
+    onCaptionPresetSelected: (Int) -> Unit,
+    onCaptionPresetNameChanged: (String) -> Unit,
     onDayCountEnabledChanged: (Boolean) -> Unit,
     onDayCountStartChanged: (Long) -> Unit,
     onDayCountTextChanged: (String) -> Unit,
-    captionItalic: Boolean,
-    captionBold: Boolean,
-    captionSizeScale: Float,
     onCaptionItalicChanged: (Boolean) -> Unit,
     onCaptionBoldChanged: (Boolean) -> Unit,
     onCaptionSizeChanged: (Float) -> Unit,
     onCaptionSizeChangeFinished: () -> Unit,
+    onCaptionYmdChanged: (Boolean) -> Unit,
     unifyStyleEnabled: Boolean,
     unifyStyles: Set<FrameStyle>,
     onUnifyStyleEnabledChanged: (Boolean) -> Unit,
     onUnifyStyleToggled: (FrameStyle, Boolean) -> Unit,
+    customFontName: String?,
+    onPickFont: () -> Unit,
+    onResetFont: () -> Unit,
     onPickDir: () -> Unit,
     onReset: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     // 日期选择弹窗开关
     var showDatePicker by remember { mutableStateOf(false) }
+    // 当前选中的日期文案配置：下方所有编辑项都作用于它
+    val captionPreset = captionPresets[captionPresetIndex]
     // 起始日期展示文本：未设置时显示占位提示
-    val startDateLabel = dayCountStart
+    val startDateLabel = captionPreset.start
         ?.let { LocalDate.ofEpochDay(it).format(DateTimeFormatter.ISO_LOCAL_DATE) }
         ?: stringResource(R.string.day_count_start_unset)
 
@@ -525,6 +547,50 @@ private fun SettingsContent(
 
         Spacer(modifier = Modifier.height(12.dp))
 
+        // 配置选择：三套日期文案各自独立，点击切换后立即应用到成图
+        Text(
+            text = stringResource(R.string.label_caption_preset),
+            fontSize = 14.sp
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.horizontalScroll(rememberScrollState())  // 别名较长时可横向滑动
+        ) {
+            repeat(captionPresets.size) { i ->
+                FilterChip(
+                    selected = i == captionPresetIndex,  // 是否为当前生效配置
+                    onClick = { onCaptionPresetSelected(i) },  // 切换配置
+                    label = {
+                        // 有别名时优先显示别名，未命名时回退为"配置 N"
+                        Text(
+                            captionPresets[i].name.trim().ifBlank {
+                                stringResource(R.string.caption_preset_name, i + 1)
+                            },
+                            fontSize = 13.sp
+                        )
+                    },
+                    enabled = dayCountEnabled,  // 日期文案未启用时不可切换
+                    modifier = Modifier.padding(end = 8.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // 配置别名：显示在切换按钮上，便于区分不同用途
+        OutlinedTextField(
+            value = captionPreset.name,
+            onValueChange = onCaptionPresetNameChanged,
+            label = { Text(stringResource(R.string.label_caption_preset_name)) },
+            supportingText = { Text(stringResource(R.string.settings_caption_preset_name_hint), fontSize = 12.sp) },
+            singleLine = true,
+            enabled = dayCountEnabled,  // 未启用日期文案时不可编辑
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
         // 起始日期：点击打开系统日期选择器
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -545,7 +611,7 @@ private fun SettingsContent(
 
         // 文案模板输入：{0} 会被替换为天数
         OutlinedTextField(
-            value = dayCountText,
+            value = captionPreset.text,
             onValueChange = onDayCountTextChanged,
             label = { Text(stringResource(R.string.label_day_count_text)) },
             supportingText = { Text(stringResource(R.string.settings_day_count_text_hint), fontSize = 12.sp) },
@@ -553,6 +619,46 @@ private fun SettingsContent(
             enabled = dayCountEnabled,  // 未启用时不可编辑
             modifier = Modifier.fillMaxWidth()
         )
+
+        // 年月日格式开关：开启后 {0} 替换为 X年X个月X天，按需省略高位单位
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            // 左侧标题与说明
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.label_caption_ymd),
+                    fontSize = 16.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.settings_caption_ymd_hint),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            // 右侧开关：仅对当前配置生效
+            Switch(
+                checked = captionPreset.yearMonthDay,
+                onCheckedChange = onCaptionYmdChanged,
+                enabled = dayCountEnabled  // 未启用日期文案时不可切换
+            )
+        }
+
+        // 当前文案实时预览：开关/模板/起始时间变化后可直接确认最终文本
+        if (dayCountEnabled) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = captionPreview
+                    ?.let { stringResource(R.string.label_caption_preview, it) }  // 已有文案时展示结果
+                    ?: stringResource(R.string.caption_preview_unavailable),  // 无法生成时说明原因
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
 
         // 字体格式：斜体 / 加粗
         Row(
@@ -565,15 +671,15 @@ private fun SettingsContent(
                 modifier = Modifier.weight(1f)
             )
             FilterChip(
-                selected = captionItalic,
-                onClick = { onCaptionItalicChanged(!captionItalic) },  // 切换斜体
+                selected = captionPreset.italic,
+                onClick = { onCaptionItalicChanged(!captionPreset.italic) },  // 切换斜体
                 label = { Text(stringResource(R.string.label_italic), fontSize = 13.sp) },
                 enabled = dayCountEnabled,
                 modifier = Modifier.padding(end = 8.dp)
             )
             FilterChip(
-                selected = captionBold,
-                onClick = { onCaptionBoldChanged(!captionBold) },  // 切换加粗
+                selected = captionPreset.bold,
+                onClick = { onCaptionBoldChanged(!captionPreset.bold) },  // 切换加粗
                 label = { Text(stringResource(R.string.label_bold), fontSize = 13.sp) },
                 enabled = dayCountEnabled
             )
@@ -587,14 +693,14 @@ private fun SettingsContent(
             Text(stringResource(R.string.label_caption_size), fontSize = 14.sp)
             Spacer(modifier = Modifier.width(8.dp))
             Slider(
-                value = captionSizeScale,
+                value = captionPreset.sizeScale,
                 onValueChange = onCaptionSizeChanged,  // 拖动实时更新百分比
                 onValueChangeFinished = onCaptionSizeChangeFinished,  // 松手后重新渲染
                 valueRange = 0.5f..1.5f,  // 50% - 150%
                 enabled = dayCountEnabled,
                 modifier = Modifier.weight(1f)
             )
-            Text("${(captionSizeScale * 100).toInt()}%", fontSize = 12.sp)
+            Text("${(captionPreset.sizeScale * 100).toInt()}%", fontSize = 12.sp)
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -650,10 +756,46 @@ private fun SettingsContent(
             }
         }
 
+        Spacer(modifier = Modifier.height(16.dp))
+        HorizontalDivider()  // 统一风格与字体之间的分隔线
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // 自定义字体：导入 ttf/otf 后应用于全部水印文字
+        Text(
+            text = stringResource(R.string.settings_font_title),
+            style = MaterialTheme.typography.titleMedium
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(stringResource(R.string.label_current_font), fontSize = 14.sp)
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = customFontName ?: stringResource(R.string.font_default),  // 未导入时显示系统默认
+            fontSize = 16.sp,
+            style = MaterialTheme.typography.bodyLarge
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = stringResource(R.string.settings_font_hint),
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Button(onClick = onPickFont) {
+                Text(stringResource(R.string.action_import_font))
+            }
+            if (customFontName != null) {
+                Spacer(modifier = Modifier.width(12.dp))
+                TextButton(onClick = onResetFont) {
+                    Text(stringResource(R.string.action_reset_font))
+                }
+            }
+        }
+
         // 日期选择弹窗
         if (showDatePicker) {
             val pickerState = rememberDatePickerState(
-                initialSelectedDateMillis = dayCountStart?.times(86_400_000L)  // epochDay 转毫秒，未设置时为空
+                initialSelectedDateMillis = captionPreset.start?.times(86_400_000L)  // epochDay 转毫秒，未设置时为空
             )
             DatePickerDialog(
                 onDismissRequest = { showDatePicker = false },

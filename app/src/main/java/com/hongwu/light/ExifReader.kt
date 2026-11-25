@@ -6,6 +6,7 @@ import androidx.exifinterface.media.ExifInterface
 import java.text.SimpleDateFormat
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.Period
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.util.Date
@@ -220,7 +221,7 @@ private fun formatShotTime(raw: String?): String? {
  * @param template 文案模板，如 "小朋友出生{0}天"
  * @return 生成好的文案；照片无拍摄时间或模板为空时返回 null（水印回退到拍摄时间/参数）
  */
-fun buildDayCountCaption(info: ShotInfo, startEpochDay: Long, template: String): String? {
+fun buildDayCountCaption(info: ShotInfo, startEpochDay: Long, template: String, yearMonthDay: Boolean = false): String? {
     // 模板为空视为未配置
     val text = template.trim().takeIf { it.isNotEmpty() } ?: return null
     // 照片必须有可解析的拍摄日期才能计算天数
@@ -229,8 +230,26 @@ fun buildDayCountCaption(info: ShotInfo, startEpochDay: Long, template: String):
     val start = runCatching { LocalDate.ofEpochDay(startEpochDay) }.getOrNull() ?: return null
     // 两个日期之间的天数差（拍摄日 − 起始日）
     val days = ChronoUnit.DAYS.between(start, shootDate)
+    // 年月日格式的文本自带"天"单位，去掉模板中紧跟占位符的"天/日"，避免出现"2个月27天天"
+    val body = if (yearMonthDay) text.replace("{0}天", "{0}").replace("{0}日", "{0}") else text
+    // 年月日格式时把天数差换算成时长文本，否则直接用天数
+    val value = if (yearMonthDay) formatDuration(start, shootDate) else days.toString()
     // 有占位符则替换，没有则追加天数
-    return if (text.contains("{0}")) text.replace("{0}", days.toString()) else "$text $days"
+    return if (body.contains("{0}")) body.replace("{0}", value) else "$body $value"
+}
+
+/** 将两个日期的间隔格式化为 X年X个月X天：不满一年不显示年，不满一个月只显示天 */
+private fun formatDuration(start: LocalDate, end: LocalDate): String {
+    // 拍摄日早于起始日时无法拆分年月，直接按负数天数展示
+    if (end.isBefore(start)) return "${ChronoUnit.DAYS.between(start, end)}天"
+    val period = Period.between(start, end)  // 年月日差值
+    // 依次拼接非零单位，高位为 0 时自然省略
+    val parts = buildList {
+        if (period.years > 0) add("${period.years}年")  // 满一年才显示年
+        if (period.months > 0) add("${period.months}个月")  // 满一个月才显示月
+        if (period.days > 0) add("${period.days}天")  // 不满一个月只显示天
+    }
+    return if (parts.isEmpty()) "0天" else parts.joinToString("")  // 同一天显示 0 天
 }
 
 /** 解析 EXIF 拍摄时间中的日期部分，兼容带/不带时分秒两种写法，解析失败返回 null */

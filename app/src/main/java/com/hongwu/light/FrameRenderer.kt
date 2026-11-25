@@ -200,6 +200,9 @@ data class CaptionLine(
     val style: CaptionStyle = CaptionStyle()  // 字体格式
 )
 
+/** 品牌行的固定字体格式：衬线粗斜体，导入自定义字体时只替换字体家族 */
+private val BRAND_STYLE = CaptionStyle(italic = true, bold = true)
+
 /** 按字体格式构造 Typeface：无格式时沿用基础字体，避免创建冗余对象 */
 private fun styledTypeface(base: Typeface, style: CaptionStyle): Typeface {
     // 组合粗体与斜体标志位
@@ -207,9 +210,12 @@ private fun styledTypeface(base: Typeface, style: CaptionStyle): Typeface {
     return if (flags == 0) base else Typeface.create(base, flags)  // 无格式直接复用基础字体
 }
 
-/** 统一风格时所有水印行共用的字体：存在文案时套用其斜体/加粗设置，否则使用系统默认字体 */
-private fun unifiedTypeface(caption: CaptionLine?): Typeface =
-    styledTypeface(Typeface.DEFAULT, caption?.style ?: CaptionStyle())  // 无文案时即系统默认字体
+/**
+ * 统一风格时所有水印行共用的字体：存在文案时套用其斜体/加粗设置
+ * 导入自定义字体时以该字体为家族，否则使用系统默认字体
+ */
+private fun unifiedTypeface(caption: CaptionLine?, customTypeface: Typeface?): Typeface =
+    styledTypeface(customTypeface ?: Typeface.DEFAULT, caption?.style ?: CaptionStyle())  // 无文案时即基础字体
 
 // ==================== 主函数 ====================
 
@@ -223,6 +229,7 @@ private fun unifiedTypeface(caption: CaptionLine?): Typeface =
  * @param rotation 旋转角度（90 的倍数）
  * @param caption 需要特殊字体格式的文案行，null 表示全部使用风格默认格式
  * @param unifyWatermark 是否统一各水印行的字体格式、字间距与透明度（字号保持各行原有比例）
+ * @param customTypeface 用户导入的字体，null 表示使用系统字体
  * @return 合成后的相框图片 Bitmap
  */
 fun createFrame(
@@ -233,14 +240,15 @@ fun createFrame(
     mainScale: Float = DEFAULT_MAIN_SCALE,
     rotation: Int = 0,
     caption: CaptionLine? = null,
-    unifyWatermark: Boolean = false
+    unifyWatermark: Boolean = false,
+    customTypeface: Typeface? = null
 ): Bitmap = when (style) {
     // 渐变风格：画布尺寸等于原图尺寸
-    FrameStyle.GRADIENT -> createGradientFrame(source, watermarkLines, bgAlpha, mainScale, rotation, caption, unifyWatermark)
+    FrameStyle.GRADIENT -> createGradientFrame(source, watermarkLines, bgAlpha, mainScale, rotation, caption, unifyWatermark, customTypeface)
     // 展框风格：画布尺寸等于照片加边框，需向外扩展
-    FrameStyle.WHITE_MOUNT -> createWhiteMountFrame(source, watermarkLines, mainScale, rotation, caption, unifyWatermark)
+    FrameStyle.WHITE_MOUNT -> createWhiteMountFrame(source, watermarkLines, mainScale, rotation, caption, unifyWatermark, customTypeface)
     // 暗色底板风格：画布尺寸等于原图尺寸，背景改为照片主色派生的深色
-    FrameStyle.DARK_PLATE -> createDarkPlateFrame(source, watermarkLines, mainScale, rotation, caption, unifyWatermark)
+    FrameStyle.DARK_PLATE -> createDarkPlateFrame(source, watermarkLines, mainScale, rotation, caption, unifyWatermark, customTypeface)
 }
 
 /**
@@ -252,9 +260,10 @@ fun createFrame(
  * @param rotation 旋转角度（90 的倍数），默认 0
  * @param caption 需要特殊字体格式的文案行，null 表示使用默认格式
  * @param unifyWatermark 是否统一各水印行的字体格式、字间距与透明度
+ * @param customTypeface 用户导入的字体，null 表示使用系统字体
  * @return 合成后的相框图片 Bitmap
  */
-fun createGradientFrame(source: Bitmap, watermarkLines: List<String>, bgAlpha: Int = DEFAULT_BG_ALPHA, mainScale: Float = DEFAULT_MAIN_SCALE, rotation: Int = 0, caption: CaptionLine? = null, unifyWatermark: Boolean = false): Bitmap {
+fun createGradientFrame(source: Bitmap, watermarkLines: List<String>, bgAlpha: Int = DEFAULT_BG_ALPHA, mainScale: Float = DEFAULT_MAIN_SCALE, rotation: Int = 0, caption: CaptionLine? = null, unifyWatermark: Boolean = false, customTypeface: Typeface? = null): Bitmap {
     // 若需要旋转，先得到旋转后的位图（90/270 会交换宽高）
     val rotated = if (rotation % 360 == 0) source else rotateBitmap(source, rotation)
 
@@ -277,7 +286,7 @@ fun createGradientFrame(source: Bitmap, watermarkLines: List<String>, bgAlpha: I
 //
 //    // ---------- 第3层：绘制水印文字 ----------
 //    // 在底部区域显示 EXIF 拍摄参数
-    drawWatermarkText(canvas, W, H, watermarkLines, mainScale, caption, unifyWatermark)
+    drawWatermarkText(canvas, W, H, watermarkLines, mainScale, caption, unifyWatermark, customTypeface)
 
     // 回收临时旋转图（若不是原图）
     if (rotated !== source) rotated.recycle()
@@ -308,8 +317,9 @@ private fun rotateBitmap(source: Bitmap, degrees: Int): Bitmap {
  * @param rotation 旋转角度（90 的倍数）
  * @param caption 需要特殊字体格式的文案行
  * @param unifyWatermark 是否统一各水印行的字体格式与字间距
+ * @param customTypeface 用户导入的字体，null 表示使用系统字体
  */
-private fun createWhiteMountFrame(source: Bitmap, watermarkLines: List<String>, mainScale: Float, rotation: Int, caption: CaptionLine?, unifyWatermark: Boolean): Bitmap {
+private fun createWhiteMountFrame(source: Bitmap, watermarkLines: List<String>, mainScale: Float, rotation: Int, caption: CaptionLine?, unifyWatermark: Boolean, customTypeface: Typeface?): Bitmap {
     // 若需要旋转，先得到旋转后的位图（90/270 会交换宽高）
     val rotated = if (rotation % 360 == 0) source else rotateBitmap(source, rotation)
 
@@ -355,7 +365,7 @@ private fun createWhiteMountFrame(source: Bitmap, watermarkLines: List<String>, 
     canvas.drawBitmap(rotated, sidePad, topPad, paint)
 
     // 在底部文字带内绘制三行黑色文字
-    drawMountWatermark(canvas, W, topPad + photoH, bandH, watermarkLines, caption, unifyWatermark)
+    drawMountWatermark(canvas, W, topPad + photoH, bandH, watermarkLines, caption, unifyWatermark, customTypeface)
 
     // 回收临时旋转图（若不是原图）
     if (rotated !== source) rotated.recycle()
@@ -368,13 +378,14 @@ private fun createWhiteMountFrame(source: Bitmap, watermarkLines: List<String>, 
  * @param bandTop 文字带顶部 Y 坐标
  * @param bandH 文字带高度
  * @param unifyWatermark 是否统一各行的字体格式与字间距
+ * @param customTypeface 用户导入的字体，null 表示使用系统字体
  */
-private fun drawMountWatermark(canvas: Canvas, W: Int, bandTop: Float, bandH: Float, lines: List<String>, caption: CaptionLine?, unifyWatermark: Boolean) {
+private fun drawMountWatermark(canvas: Canvas, W: Int, bandTop: Float, bandH: Float, lines: List<String>, caption: CaptionLine?, unifyWatermark: Boolean, customTypeface: Typeface?) {
     // 无文字或文字带过窄时不绘制
     if (lines.isEmpty() || bandH <= 0f) return
 
     // 统一风格时的共用字体（存在文案则套用其斜体/加粗）
-    val unified = unifiedTypeface(caption)
+    val unified = unifiedTypeface(caption, customTypeface)
 
     // 创建文字画笔，展框文字统一为纯黑、居中对齐
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -418,12 +429,13 @@ private fun drawMountWatermark(canvas: Canvas, W: Int, bandTop: Float, bandH: Fl
             else -> MOUNT_FOUR_POS_RATIOS[i]  // 四行版式
         }
 
-        // 品牌行使用衬线斜体还原展框质感，标语与参数行跟随系统默认字体；
-        // 日期文案行按用户设置叠加斜体/加粗；开启统一风格后所有行使用同一字体
+        // 品牌行使用衬线粗斜体还原展框质感，标语与参数行跟随系统默认字体；
+        // 日期文案行按用户设置叠加斜体/加粗；导入自定义字体后只替换字体家族，保留各行原有格式
         paint.typeface = when {
             unifyWatermark -> unified  // 统一风格：所有行共用字体
-            captionStyle != null -> styledTypeface(Typeface.DEFAULT, captionStyle)  // 文案行自定义格式
-            isBrand -> Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC)  // 衬线粗斜体
+            captionStyle != null -> styledTypeface(customTypeface ?: Typeface.DEFAULT, captionStyle)  // 文案行自定义格式
+            isBrand -> styledTypeface(customTypeface ?: Typeface.SERIF, BRAND_STYLE)  // 标题行：导入字体或衬线粗斜体
+            customTypeface != null -> customTypeface  // 其他行使用导入字体
             else -> Typeface.DEFAULT  // 系统默认字体
         }
 
@@ -452,9 +464,10 @@ private fun drawMountWatermark(canvas: Canvas, W: Int, bandTop: Float, bandH: Fl
  * 先等比缩小原图再走同一套渲染逻辑，保证缩略图与成图版式一致
  * @param caption 需要特殊字体格式的文案行
  * @param unifyWatermark 是否统一各水印行的风格
+ * @param customTypeface 用户导入的字体，null 表示使用系统字体
  * @param maxSide 缩略图最长边像素
  */
-fun createStyleThumb(source: Bitmap, style: FrameStyle, watermarkLines: List<String>, bgAlpha: Int, mainScale: Float, rotation: Int, caption: CaptionLine? = null, unifyWatermark: Boolean = false, maxSide: Int = THUMB_MAX_SIDE): Bitmap {
+fun createStyleThumb(source: Bitmap, style: FrameStyle, watermarkLines: List<String>, bgAlpha: Int, mainScale: Float, rotation: Int, caption: CaptionLine? = null, unifyWatermark: Boolean = false, customTypeface: Typeface? = null, maxSide: Int = THUMB_MAX_SIDE): Bitmap {
     // 先按旋转后的尺寸计算缩放比例（90/270 会交换宽高）
     val swap = rotation % 180 != 0  // 是否交换宽高
     val rotatedW = if (swap) source.height else source.width  // 旋转后宽
@@ -473,7 +486,7 @@ fun createStyleThumb(source: Bitmap, style: FrameStyle, watermarkLines: List<Str
     }
 
     // 走正式渲染流程生成小图
-    val thumb = createFrame(small, watermarkLines, style, bgAlpha, mainScale, rotation, caption, unifyWatermark)
+    val thumb = createFrame(small, watermarkLines, style, bgAlpha, mainScale, rotation, caption, unifyWatermark, customTypeface)
 
     // 回收临时缩放图
     if (small !== source) small.recycle()
@@ -493,8 +506,9 @@ fun createStyleThumb(source: Bitmap, style: FrameStyle, watermarkLines: List<Str
  * @param rotation 旋转角度（90 的倍数）
  * @param caption 需要特殊字体格式的文案行
  * @param unifyWatermark 是否统一两行文字的字体格式与颜色
+ * @param customTypeface 用户导入的字体，null 表示使用系统字体
  */
-private fun createDarkPlateFrame(source: Bitmap, watermarkLines: List<String>, mainScale: Float, rotation: Int, caption: CaptionLine?, unifyWatermark: Boolean): Bitmap {
+private fun createDarkPlateFrame(source: Bitmap, watermarkLines: List<String>, mainScale: Float, rotation: Int, caption: CaptionLine?, unifyWatermark: Boolean, customTypeface: Typeface?): Bitmap {
     // 若需要旋转，先得到旋转后的位图（90/270 会交换宽高）
     val rotated = if (rotation % 360 == 0) source else rotateBitmap(source, rotation)
 
@@ -546,7 +560,7 @@ private fun createDarkPlateFrame(source: Bitmap, watermarkLines: List<String>, m
     drawRoundedImage(canvas, rotated, rect, cornerRadius)
 
     // 在照片下方的文字带内绘制两行浅色文字
-    drawPlateWatermark(canvas, W, H, topPad + photoH, watermarkLines, caption, unifyWatermark)
+    drawPlateWatermark(canvas, W, H, topPad + photoH, watermarkLines, caption, unifyWatermark, customTypeface)
 
     // 回收临时旋转图（若不是原图）
     if (rotated !== source) rotated.recycle()
@@ -577,8 +591,9 @@ private fun drawRoundedImage(canvas: Canvas, source: Bitmap, rect: RectF, corner
  * 绘制暗色底板文字：第1行品牌（衬线粗斜体）与型号（系统字体）混排并整体居中，第2行为拍摄参数
  * @param photoBottom 照片底边 Y 坐标，文字带为照片底边到画布底边之间的区域
  * @param unifyWatermark 是否统一两行文字的字体格式与颜色
+ * @param customTypeface 用户导入的字体，null 表示使用系统字体
  */
-private fun drawPlateWatermark(canvas: Canvas, W: Int, H: Int, photoBottom: Float, lines: List<String>, caption: CaptionLine?, unifyWatermark: Boolean) {
+private fun drawPlateWatermark(canvas: Canvas, W: Int, H: Int, photoBottom: Float, lines: List<String>, caption: CaptionLine?, unifyWatermark: Boolean, customTypeface: Typeface?) {
     // 文字带高度：照片底边到画布底边
     val bandH = H - photoBottom  // 文字带高度
     if (bandH <= 0f) return  // 照片铺满时没有地方放文字
@@ -599,19 +614,19 @@ private fun drawPlateWatermark(canvas: Canvas, W: Int, H: Int, photoBottom: Floa
     val centerX = W / 2f
 
     // 统一风格时的共用字体（存在文案则套用其斜体/加粗）
-    val unified = unifiedTypeface(caption)
+    val unified = unifiedTypeface(caption, customTypeface)
 
-    // 品牌画笔：衬线粗斜体，浅色保证可读；统一风格时改为共用字体
+    // 品牌画笔：衬线粗斜体，浅色保证可读；统一风格或导入字体时替换字体家族
     val brandPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textAlign = Paint.Align.LEFT  // 分段左对齐绘制，便于整行居中
-        typeface = if (unifyWatermark) unified else Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC)  // 统一风格或衬线粗斜体
+        typeface = if (unifyWatermark) unified else styledTypeface(customTypeface ?: Typeface.SERIF, BRAND_STYLE)  // 统一字体或标题格式
         color = DARK_TEXT_BRAND_COLOR  // 浅灰白
         textSize = bandH * DARK_TEXT1_SIZE_RATIO  // 字号按带高计算
     }
-    // 型号画笔：跟随系统默认字体，与品牌同字号同基线；统一风格时与品牌同字体
+    // 型号画笔：跟随系统默认字体，与品牌同字号同基线；统一风格或导入字体时同字体
     val modelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textAlign = Paint.Align.LEFT  // 分段左对齐
-        typeface = if (unifyWatermark) unified else Typeface.DEFAULT  // 统一风格或系统默认字体
+        typeface = if (unifyWatermark) unified else customTypeface ?: Typeface.DEFAULT  // 统一字体或系统默认字体
         color = DARK_TEXT_BRAND_COLOR  // 与品牌同色
         textSize = brandPaint.textSize  // 同字号
     }
@@ -643,10 +658,11 @@ private fun drawPlateWatermark(canvas: Canvas, W: Int, H: Int, photoBottom: Floa
         val captionStyle = caption?.takeIf { it.text == params }?.style
         val paramsPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textAlign = Paint.Align.CENTER  // 整行居中
-            // 文案行用自定义格式，其余跟随系统默认字体；统一风格时两行共用字体
+            // 文案行用自定义格式，其余跟随系统默认字体；统一风格时共用字体；导入字体时替换字体家族
             typeface = when {
                 unifyWatermark -> unified  // 统一风格：所有行共用字体
-                captionStyle != null -> styledTypeface(Typeface.DEFAULT, captionStyle)  // 文案行自定义格式
+                captionStyle != null -> styledTypeface(customTypeface ?: Typeface.DEFAULT, captionStyle)  // 文案行自定义格式
+                customTypeface != null -> customTypeface  // 其他行使用导入字体
                 else -> Typeface.DEFAULT  // 系统默认字体
             }
             color = if (unifyWatermark) DARK_TEXT_BRAND_COLOR else DARK_TEXT_PARAMS_COLOR  // 统一风格时与品牌行同色
@@ -661,7 +677,7 @@ private fun drawPlateWatermark(canvas: Canvas, W: Int, H: Int, photoBottom: Floa
     if (hasTime) {
         val timePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textAlign = Paint.Align.CENTER  // 整行居中
-            typeface = if (unifyWatermark) unified else Typeface.DEFAULT  // 统一风格时共用字体
+            typeface = if (unifyWatermark) unified else customTypeface ?: Typeface.DEFAULT  // 统一字体或系统默认字体
             color = if (unifyWatermark) DARK_TEXT_BRAND_COLOR else DARK_TEXT_PARAMS_COLOR  // 统一风格时与品牌行同色
             textSize = bandH * DARK_TEXT3_SIZE_RATIO  // 字号按带高计算
         }
@@ -857,13 +873,14 @@ private fun drawDropShadow(
  * 绘制水印文字
  * 在主体图底边与画布底边之间的边框区域内居中显示
  * @param unifyWatermark 是否统一两行文字的字体格式与透明度
+ * @param customTypeface 用户导入的字体，null 表示使用系统字体
  */
-private fun drawWatermarkText(canvas: Canvas, W: Int, H: Int, lines: List<String>, mainScale: Float, caption: CaptionLine?, unifyWatermark: Boolean) {
+private fun drawWatermarkText(canvas: Canvas, W: Int, H: Int, lines: List<String>, mainScale: Float, caption: CaptionLine?, unifyWatermark: Boolean, customTypeface: Typeface?) {
     // 如果没有水印文字，直接返回
     if (lines.isEmpty()) return
 
     // 统一风格时的共用字体（存在文案则套用其斜体/加粗）
-    val unified = unifiedTypeface(caption)
+    val unified = unifiedTypeface(caption, customTypeface)
 
     // 创建文字画笔
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -886,7 +903,8 @@ private fun drawWatermarkText(canvas: Canvas, W: Int, H: Int, lines: List<String
         val captionStyle = caption?.takeIf { it.text == lines[0] }?.style
         paint.typeface = when {
             unifyWatermark -> unified  // 统一风格：所有行共用字体
-            captionStyle != null -> styledTypeface(Typeface.DEFAULT, captionStyle)  // 文案行自定义格式
+            captionStyle != null -> styledTypeface(customTypeface ?: Typeface.DEFAULT, captionStyle)  // 文案行自定义格式
+            customTypeface != null -> customTypeface  // 单行水印使用导入字体
             else -> Typeface.DEFAULT  // 系统默认字体
         }
         paint.textSize = borderH * 0.3f * (captionStyle?.sizeScale ?: 1f)  // 字号：边框高度的 30%
@@ -909,7 +927,8 @@ private fun drawWatermarkText(canvas: Canvas, W: Int, H: Int, lines: List<String
             val rowStyle = caption?.takeIf { it.text == line }?.style  // 该行是否为日期文案
             paint.typeface = when {
                 unifyWatermark -> unified  // 统一风格：所有行共用字体
-                rowStyle != null -> styledTypeface(Typeface.DEFAULT, rowStyle)  // 文案行自定义格式
+                rowStyle != null -> styledTypeface(customTypeface ?: Typeface.DEFAULT, rowStyle)  // 文案行自定义格式
+                customTypeface != null -> customTypeface  // 其他行使用导入字体
                 else -> Typeface.DEFAULT  // 系统默认字体
             }
             paint.textSize = borderH * sizeRatios[index] * (rowStyle?.sizeScale ?: 1f)  // 字号按边框高度计算
