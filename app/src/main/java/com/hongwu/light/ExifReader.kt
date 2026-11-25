@@ -67,6 +67,7 @@ fun buildWatermarkLines(
     FrameStyle.GRADIENT -> buildGradientLines(info, custom, showShotTime, dayCaption)  // 渐变风格水印
     FrameStyle.WHITE_MOUNT -> buildMountLines(info, custom, showShotTime, dayCaption)  // 展框风格水印
     FrameStyle.DARK_PLATE -> buildDarkPlateLines(info, custom, showShotTime, dayCaption)  // 暗色底板风格水印
+    FrameStyle.OVERLAY -> buildGradientLines(info, custom, showShotTime, dayCaption)  // 无框风格沿用渐变的水文行结构
 }
 
 /** 品牌标语表：仅收录已确认无误的品牌，未命中则不显示标语行 */

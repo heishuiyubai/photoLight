@@ -396,6 +396,7 @@ private fun FrameContent(
                         onValueChange = viewModel::onMainScaleChanged,
                         onValueChangeFinished = viewModel::onMainScaleChangeFinished,
                         valueRange = 0.5f..1.0f,  // 范围 50%-100%
+                        enabled = uiState.style != FrameStyle.OVERLAY,  // 无框风格照片铺满画面，主体图大小不生效
                         modifier = Modifier.weight(1f)
                     )
                     Text("${(uiState.mainScale * 100).toInt()}%", fontSize = 12.sp)

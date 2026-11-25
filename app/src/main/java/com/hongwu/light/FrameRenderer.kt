@@ -178,13 +178,65 @@ private val DARK_TEXT_PARAMS_COLOR = Color.rgb(168, 162, 158)
 /** 底板背景取色用的缩略尺寸：越小越快，均值精度足够 */
 private const val DARK_AVG_SAMPLE_SIZE = 32
 
+// ==================== 无框直出风格常量 ====================
+
+/** 无框风格文字区底边距占画布短边的比例 */
+private const val OVERLAY_BOTTOM_PAD_RATIO = 0.055f
+
+/** 无框风格行间距占画布短边的比例 */
+private const val OVERLAY_LINE_GAP_RATIO = 0.016f
+
+/** 无框风格单行版式字号占画布短边的比例 */
+private const val OVERLAY_TEXT_SINGLE_RATIO = 0.048f
+
+/** 无框风格标题行字号占画布短边的比例 */
+private const val OVERLAY_TEXT1_SIZE_RATIO = 0.040f
+
+/** 无框风格日期文案行字号占画布短边的比例：主文案最大 */
+private const val OVERLAY_TEXT2_SIZE_RATIO = 0.052f
+
+/** 无框风格拍摄时间与参数行字号占画布短边的比例 */
+private const val OVERLAY_TEXT3_SIZE_RATIO = 0.030f
+
+/** 无框风格常规字距（em）：细体配略宽字距更透气 */
+private const val OVERLAY_TEXT_SPACING = 0.03f
+
+/** 无框风格标题行字距（em）：略宽以突出品牌或标题 */
+private const val OVERLAY_TITLE_SPACING = 0.06f
+
+/** 无框风格日期文案行透明度：主文案最实 */
+private const val OVERLAY_ALPHA_CAPTION = 235
+
+/** 无框风格标题行透明度 */
+private const val OVERLAY_ALPHA_BRAND = 210
+
+/** 无框风格时间与参数行透明度：辅助信息略淡 */
+private const val OVERLAY_ALPHA_SECONDARY = 190
+
+/** 无框风格统一水印模式下的整行透明度 */
+private const val OVERLAY_ALPHA_UNIFIED = 220
+
+/** 无框风格文字投影透明度 (0-255)：照片底色不可控，靠投影保证白字可读 */
+private const val OVERLAY_SHADOW_ALPHA = 90
+
+/** 无框风格文字投影模糊半径占画布短边的比例 */
+private const val OVERLAY_SHADOW_BLUR_RATIO = 0.014f
+
+/** 无框风格文字投影 Y 轴偏移占画布短边的比例 */
+private const val OVERLAY_SHADOW_OFFSET_RATIO = 0.002f
+
+/** 无框风格的柔和基础字体：细体无衬线；已导入字体时仍以导入字体为准 */
+private fun overlayBaseTypeface(customTypeface: Typeface?): Typeface =
+    customTypeface ?: Typeface.create("sans-serif-light", Typeface.NORMAL)
+
 // ==================== 相框风格 ====================
 
 /** 相框风格：不同风格的画布构造方式与绘制层完全不同 */
 enum class FrameStyle(val label: String) {
     GRADIENT("渐变"),      // 原图半透明铺底 + 圆角羽化 + 投影（项目原有风格）
     WHITE_MOUNT("白框"),    // 白色扩画布 + 硬边照片 + 底部三行黑色文字（展框风格）
-    DARK_PLATE("暗色")      // 照片主色派生的深色底板 + 偏上圆角照片 + 两行浅色文字
+    DARK_PLATE("暗色"),     // 照片主色派生的深色底板 + 偏上圆角照片 + 两行浅色文字
+    OVERLAY("无框")         // 照片原尺寸铺满、无背景无边框，文字直接压在底部居中
 }
 
 /** 文案行的字体格式设置：斜体、加粗、字号比例 */
@@ -249,6 +301,8 @@ fun createFrame(
     FrameStyle.WHITE_MOUNT -> createWhiteMountFrame(source, watermarkLines, mainScale, rotation, caption, unifyWatermark, customTypeface)
     // 暗色底板风格：画布尺寸等于原图尺寸，背景改为照片主色派生的深色
     FrameStyle.DARK_PLATE -> createDarkPlateFrame(source, watermarkLines, mainScale, rotation, caption, unifyWatermark, customTypeface)
+    // 无框风格：画布尺寸等于原图尺寸，不加背景与留白，文字直接压在照片上
+    FrameStyle.OVERLAY -> createOverlayFrame(source, watermarkLines, rotation, caption, unifyWatermark, customTypeface)
 }
 
 /**
@@ -456,6 +510,117 @@ private fun drawMountWatermark(canvas: Canvas, W: Int, bandTop: Float, bandH: Fl
         // letterSpacing 会在末字符后再追加一份间距，居中绘制时向右补偿半个字距
         val drawX = centerX + paint.letterSpacing * paint.textSize / 2f  // 该行绘制起点
         canvas.drawText(lines[i], drawX, baseline, paint)  // 绘制该行文字
+    }
+}
+
+/**
+ * 生成无框直出风格：不加背景也不加留白，照片按原始分辨率铺满画布，水印文字直接压在照片底部居中
+ * @param source 原始图片 Bitmap
+ * @param watermarkLines 水印文本（标题 / 日期文案 / 拍摄时间）
+ * @param rotation 旋转角度（90 的倍数）
+ * @param caption 需要特殊字体格式的文案行
+ * @param unifyWatermark 是否统一各行的字体格式、字间距与透明度
+ * @param customTypeface 用户导入的字体，null 表示使用系统字体
+ */
+private fun createOverlayFrame(source: Bitmap, watermarkLines: List<String>, rotation: Int, caption: CaptionLine?, unifyWatermark: Boolean, customTypeface: Typeface?): Bitmap {
+    // 若需要旋转，先得到旋转后的位图（90/270 会交换宽高）
+    val rotated = if (rotation % 360 == 0) source else rotateBitmap(source, rotation)
+
+    // 画布尺寸等于照片尺寸，输出与原图完全一致（无背景无边框）
+    val W = rotated.width  // 画布宽度
+    val H = rotated.height  // 画布高度
+
+    // 创建画布 Bitmap，并按 1:1 贴入照片避免二次缩放损失画质
+    val result = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(result)
+    canvas.drawBitmap(rotated, 0f, 0f, Paint(Paint.FILTER_BITMAP_FLAG))
+
+    // 照片之上直接绘制底部居中的白色文字
+    drawOverlayWatermark(canvas, W, H, watermarkLines, caption, unifyWatermark, customTypeface)
+
+    // 回收临时旋转图（若不是原图）
+    if (rotated !== source) rotated.recycle()
+
+    return result
+}
+
+/**
+ * 绘制无框风格水印：各行底部居中、自下向上堆叠，白色文字配柔和投影
+ * 字号与透明度按行的角色分层：日期文案 > 标题 > 拍摄时间与参数
+ * @param unifyWatermark 是否统一各行的字体格式、字间距与透明度
+ * @param customTypeface 用户导入的字体，null 表示使用系统字体
+ */
+private fun drawOverlayWatermark(canvas: Canvas, W: Int, H: Int, lines: List<String>, caption: CaptionLine?, unifyWatermark: Boolean, customTypeface: Typeface?) {
+    // 无文字时不绘制
+    if (lines.isEmpty()) return
+
+    // 画布短边为尺寸基准，保证横图与竖图的文字大小观感一致
+    val shortSide = min(W.toFloat(), H.toFloat())  // 画布短边长度
+    val bottomPad = shortSide * OVERLAY_BOTTOM_PAD_RATIO  // 文字区距底边的留白
+    val lineGap = shortSide * OVERLAY_LINE_GAP_RATIO  // 行间距
+    val shadowBlur = shortSide * OVERLAY_SHADOW_BLUR_RATIO  // 文字投影模糊半径
+    val shadowOffset = shortSide * OVERLAY_SHADOW_OFFSET_RATIO  // 文字投影下移量
+
+    // 柔和基础字体：细体无衬线，导入字体存在时以导入字体为准
+    val base = overlayBaseTypeface(customTypeface)
+    // 统一风格时的共用字体（存在文案则套用其斜体/加粗）
+    val unified = styledTypeface(base, caption?.style ?: CaptionStyle())
+
+    // 末行是否拍摄时间行：日期文案位于倒数第二行时，末行为额外的时间行
+    val lastIndex = lines.lastIndex  // 末行下标
+    val captionIndex = caption?.let { c -> lines.indexOfLast { it == c.text } } ?: -1  // 日期文案所在下标
+    val timeIndex = if (lines.size >= 3 && captionIndex == lastIndex - 1) lastIndex else -1  // 拍摄时间行下标
+
+    // 逐行准备画笔，字号、字体、字距与透明度都由行的角色决定
+    val paints = lines.mapIndexed { i, line ->
+        val isBrand = i == 0  // 首行为品牌/标题行
+        // 日期文案行：文本与文案一致时改用用户设置的字体格式
+        val captionStyle = caption?.takeIf { it.text == line }?.style
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textAlign = Paint.Align.CENTER  // 底部居中排版
+            color = Color.WHITE  // 白色文字
+            // 字号比例：单行铺满时最大，其次日期文案与标题，时间与参数最小
+            val sizeRatio = when {
+                lines.size == 1 -> OVERLAY_TEXT_SINGLE_RATIO  // 单行版式
+                i == captionIndex -> OVERLAY_TEXT2_SIZE_RATIO  // 日期文案行
+                i == timeIndex -> OVERLAY_TEXT3_SIZE_RATIO  // 拍摄时间行
+                isBrand -> OVERLAY_TEXT1_SIZE_RATIO  // 标题行
+                else -> OVERLAY_TEXT3_SIZE_RATIO  // 参数行
+            }
+            // 文案行再乘以用户设置的字号倍数
+            textSize = shortSide * sizeRatio * (captionStyle?.sizeScale ?: 1f)
+            typeface = when {
+                unifyWatermark -> unified  // 统一风格：所有行共用字体
+                captionStyle != null -> styledTypeface(base, captionStyle)  // 文案行自定义格式
+                else -> base  // 其余行使用柔和基础字体（导入字体或系统细体）
+            }
+            letterSpacing = when {
+                unifyWatermark -> OVERLAY_TEXT_SPACING  // 统一风格：所有行常规字距
+                isBrand -> OVERLAY_TITLE_SPACING  // 标题行宽字距
+                else -> OVERLAY_TEXT_SPACING  // 其余行常规字距
+            }
+            alpha = when {
+                unifyWatermark -> OVERLAY_ALPHA_UNIFIED  // 统一风格：所有行同透明度
+                i == captionIndex -> OVERLAY_ALPHA_CAPTION  // 日期文案最实
+                isBrand -> OVERLAY_ALPHA_BRAND  // 标题行次之
+                else -> OVERLAY_ALPHA_SECONDARY  // 时间与参数行略淡
+            }
+            // 柔和投影：照片亮暗不可控，靠阴影保证白字可读
+            setShadowLayer(shadowBlur, 0f, shadowOffset, Color.argb(OVERLAY_SHADOW_ALPHA, 0, 0, 0))
+        }
+    }
+
+    // 自底向上排布：末行贴住底部留白，其余行按各自行高依次上移
+    var nextBottom = H - bottomPad  // 上一行（更靠下）的顶边位置
+    for (i in paints.indices.reversed()) {
+        val paint = paints[i]
+        if (lines[i].isEmpty()) continue  // 空行只占位不绘制
+        val fm = paint.fontMetrics  // 字体度量
+        val baseline = nextBottom - fm.descent  // 让行底对齐到 nextBottom 的基线
+        // letterSpacing 会在末字符后再追加一份间距，居中绘制时向右补偿半个字距
+        val drawX = W / 2f + paint.letterSpacing * paint.textSize / 2f
+        canvas.drawText(lines[i], drawX, baseline, paint)  // 绘制该行文字
+        nextBottom = baseline + fm.ascent - lineGap  // 上一行的顶边位置
     }
 }
 
